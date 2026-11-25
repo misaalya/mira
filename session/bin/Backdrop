@@ -1,0 +1,38 @@
+#!/bin/sh
+# Backdrop [--pointer] [--pid PID] [--click CMD]
+#
+# Dims and blurs the monitor a popup opens on (the pointer's with --pointer,
+# else bspwm's focused one), all of it but the bar, which stays sharp.
+# Behind the popup: run it right *before* the
+# popup, which then maps above it. Prints the backdrop's PID; it goes away
+# when PID (default: the caller) exits, when it is clicked (after running
+# CMD), or when killed. See src/misa-backdrop; picom rule "Backdrop".
+# Prints nothing (and the popup just opens without it) when misa-backdrop
+# is not built.
+
+bin="${0%/*}/misa-backdrop"
+[ -x "$bin" ] || exit 0
+
+ptr= pid=$PPID click=
+while [ $# -gt 0 ]; do
+    case $1 in
+        --pointer) ptr=--pointer ;;
+        --pid) pid=$2; shift ;;
+        --click) click=$2; shift ;;
+    esac
+    shift
+done
+
+set -- $("${0%/*}/BarAnchor" $ptr)
+rect=$(bspc query -T -m "${1:-focused}" 2>/dev/null | grep -o '"rectangle":{[^}]*}' | head -n 1)
+x=${rect#*\"x\":}; x=${x%%,*}
+y=${rect#*\"y\":}; y=${y%%,*}
+w=${rect#*\"width\":}; w=${w%%,*}
+h=${rect#*\"height\":}; h=${h%%\}*}
+[ -n "$w" ] || exit 0
+# Leave the bar out (BarAnchor: its edge and height): it stays sharp.
+if [ "${3:-0}" -ge 8 ]; then
+    h=$((h - $3))
+    [ "$2" = top ] && y=$((y + $3))
+fi
+exec "$bin" "$x" "$y" "$w" "$h" --pid "$pid" ${click:+--click "$click"}

@@ -1,0 +1,44 @@
+#!/bin/sh
+# =============================================================
+# Term — Terminal launcher for Mira (Ghostty with fast D-Bus path).
+# Adapted from gh0stzk/dotfiles (GPL-3.0).
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-23 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
+GHOSTTY_APP=com.mitchellh.ghostty
+
+ghostty_running() {
+    command -v gdbus >/dev/null 2>&1 && command -v gapplication >/dev/null 2>&1 || return 1
+    case $(gdbus call --session --dest org.freedesktop.DBus \
+        --object-path /org/freedesktop/DBus \
+        --method org.freedesktop.DBus.NameHasOwner "$GHOSTTY_APP" 2>/dev/null) in
+        *true*) return 0 ;;
+    esac
+    return 1
+}
+
+case "${1:-}" in
+    --terminal)
+        if ghostty_running && gapplication action "$GHOSTTY_APP" new-window 2>/dev/null; then
+            exit 0
+        fi
+        exec ghostty
+        ;;
+    --floating)
+        exec ghostty --class=FloaTerm --title=FloaTerm
+        ;;
+    --checkupdates)
+        exec ghostty --class=Updating --title=Updating -e "$MIRA_DIR/bin/Updates" --print-updates
+        ;;
+    --yazi)
+        exec ghostty --class=YaziTerm --title=YaziTerm -e yazi
+        ;;
+    *)
+        exec ghostty "$@"
+        ;;
+esac

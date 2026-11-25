@@ -1,0 +1,44 @@
+#!/bin/sh
+# =============================================================
+# OpenApps — Application and panel dispatcher for Mira.
+# Adapted from gh0stzk/dotfiles (GPL-3.0).
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-23 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+case "${1:-}" in
+    --menu)          exec RofiLauncher ${2:+"$2"} ;;
+    --rice)          exec RiceSelector ;;
+    --bar)           exec BarSelector ;;
+    --terminal)      exec Term --terminal ;;
+    --floating)      exec Term --floating ;;
+    --checkupdates)  exec Term --checkupdates ;;
+    --netmanager)
+        run="${XDG_RUNTIME_DIR:-/tmp}"
+        if [ -p "$run/wifi-panel.fifo" ] && [ -r "$run/wifi-panel.pid" ] &&
+           read -r pid <"$run/wifi-panel.pid" 2>/dev/null && [ -n "$pid" ] &&
+           kill -0 "$pid" 2>/dev/null; then
+            printf 'toggle %s\n' "${2:-}" >"$run/wifi-panel.fifo"
+            exit 0
+        fi
+        if command -v WifiPanel >/dev/null 2>&1; then
+            exec WifiPanel ${2:+"$2"}
+        fi
+        exec nm-connection-editor
+        ;;
+    --bluetooth)     exec BluetoothPanel ${2:+"$2"} ;;
+    --clipboard)     exec ClipMenu ${2:+"$2"} ;;
+    --screenshot)    exec Shot ;;
+    --powermenu)     exec PowerMenu ${2:+"$2"} ;;
+    --yazi)          exec Term --yazi ;;
+    --filemanager)   exec Term --yazi ;;
+    --music|--player) exec BarPanel toggle music ${2:+"$2"} ;;
+    --browser)       exec brave-browser ;;
+    --editor)        exec zed ;;
+    --soundcontrol)  exec pavucontrol ;;
+    --KeyHelp)       exec Help ;;
+    *)               echo "Usage: OpenApps --menu|--terminal|--floating|--netmanager|--bluetooth|--clipboard|--screenshot|--powermenu|--music|--browser|--editor|--filemanager|--soundcontrol|--checkupdates|--KeyHelp" >&2; exit 1 ;;
+esac

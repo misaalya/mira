@@ -1,0 +1,75 @@
+// Power panel (bin/PowerMenu): the shared bar-menu look, as a single row of
+// icon tiles: Lock, Suspend, Log out, Restart, Shut down. No title line: the
+// panel keeps one fixed height, so nothing ever shifts under the pointer.
+//
+// Confirming happens in place: the armed tile (Log out / Restart / Shut
+// down) keeps its spot, is selected and urgent (accent) and shows a check
+// mark; clicking it again runs it.
+//
+// The selection follows the pointer (hover-select), so the lit tile is the
+// one under the mouse and a click acts on exactly that tile. Tiles sit on a
+// faint surface; the selected one is bright on a stronger surface. Rows
+// marked urgent (-u: Shut down, and the armed tile) take the rice's accent
+// colour. Same width as the Bluetooth panel. Left/Right + Enter work too;
+// Esc / click outside closes.
+@import "BarMenu.rasi"
+
+configuration {
+    hover-select:               true;
+    me-select-entry:            "";
+    me-accept-entry:            "MousePrimary";
+    kb-row-left:                "Left";
+    kb-row-right:               "Right";
+    kb-move-char-back:          "Control+b";
+    kb-move-char-forward:       "Control+f";
+}
+
+window {
+    width:                      340px;
+}
+
+mainbox {
+    padding:                    12px;
+    children:                   [ "listview" ];
+}
+
+listview {
+    columns:                    5;
+    lines:                      1;
+    fixed-columns:              true;
+    spacing:                    8px;
+}
+
+element {
+    padding:                    16px 0px;
+    border-radius:              12px;
+}
+
+element normal.normal,
+element alternate.normal,
+element normal.active,
+element alternate.active {
+    background-color:           @surface-soft;
+    text-color:                 @foreground-muted;
+}
+
+element normal.urgent,
+element alternate.urgent {
+    background-color:           @surface-soft;
+    text-color:                 @urgent;
+}
+
+element selected.normal,
+element selected.active {
+    background-color:           @selected-soft;
+    text-color:                 @foreground;
+}
+
+element selected.urgent {
+    background-color:           @selected-soft;
+    text-color:                 @urgent;
+}
+
+element-text {
+    horizontal-align:           0.5;
+}

@@ -1,0 +1,174 @@
+#!/bin/sh
+# =============================================================
+# WallSelect — Fullscreen wallpaper gallery picker for Mira.
+# Adapted from gh0stzk/dotfiles (GPL-3.0) with native CardPicker
+# (--layout gallery) and misa-wall (Mira Luma-Halftone Develop SIMD engine).
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-24 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
+current_theme="mira"
+[ -r "$MIRA_DIR/.theme" ] && read -r current_theme <"$MIRA_DIR/.theme"
+theme_walls="$MIRA_DIR/themes/$current_theme/walls"
+theme_conf="$MIRA_DIR/themes/$current_theme/theme.conf"
+
+USER_WALL_DIR="${MIRA_USER_WALL_DIR:-}"
+# shellcheck disable=SC1091
+[ -z "$USER_WALL_DIR" ] && [ -f "$MIRA_DIR/config/wallselect.conf" ] && . "$MIRA_DIR/config/wallselect.conf"
+if [ -z "$USER_WALL_DIR" ]; then
+    pics=$(xdg-user-dir PICTURES 2>/dev/null || true)
+    [ -n "$pics" ] || pics="$HOME/Pictures"
+    USER_WALL_DIR="$pics/Wallpapers"
+fi
+mkdir -p "$USER_WALL_DIR"
+
+notify() {
+    command -v notify-send >/dev/null 2>&1 && notify-send -a WallSelect "$@"
+}
+
+is_image() {
+    case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+        *.jpg | *.jpeg | *.png | *.webp | *.bmp) return 0 ;;
+    esac
+    return 1
+}
+
+added=0
+last_added=""
+add_one() {
+    src=$1
+    is_image "$src" || return 0
+    [ -f "$src" ] || return 0
+    base=${src##*/}
+    dest="$USER_WALL_DIR/$base"
+    if [ -e "$dest" ]; then
+        cmp -s "$src" "$dest" && return 0
+        stem=${base%.*}
+        ext=${base##*.}
+        n=1
+        while [ -e "$USER_WALL_DIR/$stem-$n.$ext" ]; do
+            n=$((n + 1))
+        done
+        dest="$USER_WALL_DIR/$stem-$n.$ext"
+    fi
+    if cp -- "$src" "$dest"; then
+        added=$((added + 1))
+        last_added=$dest
+    fi
+}
+
+add_paths() {
+    for p in "$@"; do
+        if [ -d "$p" ]; then
+            for f in "$p"/*; do
+                add_one "$f"
+            done
+        else
+            add_one "$p"
+        fi
+    done
+}
+
+if [ "${1:-}" = "--add" ]; then
+    shift
+    add_paths "$@"
+    echo "$added wallpaper(s) added to $USER_WALL_DIR"
+    exit 0
+fi
+
+# Non-blocking single-instance lock (never queue duplicate launches).
+LOCKFILE="${XDG_RUNTIME_DIR:-/tmp}/mira-wallselect.lock"
+exec 8>"$LOCKFILE"
+flock -n 8 || exit 0
+
+# Resolve current wallpaper for the IN USE badge.
+current_wall=$(sed -n 's/^DEFAULT_WALL="\(.*\)"$/\1/p' "$theme_conf" 2>/dev/null)
+current_wall=$(printf '%s' "$current_wall" | sed "s|^\${MIRA_DIR}|$MIRA_DIR|; s|^\$MIRA_DIR|$MIRA_DIR|; s|^\${HOME}|$HOME|; s|^\$HOME|$HOME|")
+
+add_dialog() {
+    chosen=$(mktemp)
+    start=$(xdg-user-dir PICTURES 2>/dev/null || true)
+    [ -d "$start" ] || start="$HOME"
+    ghostty --class=dev.misa.yazi --gtk-single-instance=false \
+        --window-decoration=none --title="Add wallpaper" \
+        -e yazi --chooser-file="$chosen" "$start" >/dev/null 2>&1
+    added=0
+    last_added=""
+    if [ -s "$chosen" ]; then
+        while IFS= read -r p || [ -n "$p" ]; do
+            [ -n "$p" ] && add_paths "$p"
+        done <"$chosen"
+    fi
+    rm -f "$chosen"
+    if [ "$added" -gt 0 ]; then
+        notify "Wallpaper" "$added image(s) added to $USER_WALL_DIR"
+    fi
+}
+
+file_list=$(mktemp)
+menu_list=$(mktemp)
+trap 'rm -f "$file_list" "$menu_list"' EXIT
+
+while :; do
+    : >"$file_list"
+    for d in "$USER_WALL_DIR" "$theme_walls"; do
+        [ -d "$d" ] || continue
+        find "$d" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.bmp" \) |
+            LC_ALL=C sort >>"$file_list"
+    done
+
+    # Build menu rows in a single awk pass (CardPicker handles shared
+    # cross-theme thumbnail caching asynchronously in C with zero startup lag).
+    active=$(awk -v cur="$current_wall" -v out="$menu_list" '
+        BEGIN {
+            print "Add wallpaper\tFrom your files\t\t" > out
+            act = -1
+        }
+        {
+            p = $0
+            if (p == cur) act = NR
+            name = p
+            sub(/^.*\//, "", name)
+            stem = name
+            sub(/\.[^.]*$/, "", stem)
+            ext = (name ~ /\./) ? name : ""
+            sub(/^.*\./, "", ext)
+            gsub(/\t/, " ", stem)
+            gsub(/\t/, " ", p)
+            printf "%s\t%s\t\t%s\n", stem, toupper(ext), p > out
+        }
+        END {
+            close(out)
+            print act
+        }
+    ' "$file_list")
+
+    idx=$(CardPicker --layout gallery --active "$active" --select "$((active > 0 ? active : 0))" <"$menu_list")
+    [ -n "$idx" ] || exit 0
+
+    if [ "$idx" -eq 0 ]; then
+        add_dialog
+        continue
+    fi
+    wall_file=$(sed -n "${idx}p" "$file_list")
+    [ -f "$wall_file" ] || exit 1
+    break
+done
+
+# CardPicker already finished the transition and applied the root pixmap before
+# unmapping; persist the choice and ensure root matches without re-transitioning.
+esc=$(printf '%s' "$wall_file" | sed 's/[&|\\]/\\&/g')
+sed -i "$theme_conf" \
+    -e 's/^ENGINE=.*/ENGINE="Default"/' \
+    -e "s|^DEFAULT_WALL=.*|DEFAULT_WALL=\"$esc\"|"
+if command -v misa-wall >/dev/null 2>&1; then
+    misa-wall --no-transition "$wall_file" 8>&-
+elif command -v feh >/dev/null 2>&1; then
+    feh --bg-fill "$wall_file" 8>&-
+fi
+# Blurred copy for the login screen (no-op without the SDDM theme).
+command -v SddmBackground >/dev/null 2>&1 && SddmBackground "$wall_file" >/dev/null 2>&1 8>&- &

@@ -1,0 +1,123 @@
+// BarMenu: the shared look of the rofi menus opened from bar icons
+// (Bluetooth, power, ...): a panel against the bar at the right end, where
+// the status icons are. The caller sets the monitor and placement with
+// `BarAnchor --rofi east` (top or bottom bar), and -window-title "Bar panel"
+// so picom gives it the bar-panel animation.
+// Same look as launcher style 4: opaque panel, muted title line (-mesg),
+// one column that shrinks to its rows, rows are cards (see element below), rows marked active (-a) on a soft background.
+
+configuration {
+    show-icons:                 false;
+    hover-select:               false;
+    me-select-entry:            "";
+    me-accept-entry:            "MousePrimary";
+    click-to-exit:              true;
+}
+
+@import "shared.rasi"
+
+window {
+    transparency:               "real";
+    location:                   northeast;
+    anchor:                     northeast;
+    x-offset:                   -8px;
+    y-offset:                   52px;
+    width:                      340px;
+    enabled:                    true;
+    border:                     1px;
+    border-color:               @border-soft;
+    border-radius:              14px;
+    cursor:                     "default";
+    background-color:           @background;
+}
+
+mainbox {
+    enabled:                    true;
+    spacing:                    10px;
+    padding:                    12px;
+    background-color:           transparent;
+    orientation:                vertical;
+    children:                   [ "message", "listview" ];
+}
+
+// The title line (-mesg): "Bluetooth · 1 connected".
+message {
+    padding:                    2px 4px 0px 4px;
+    background-color:           transparent;
+}
+
+textbox {
+    background-color:           transparent;
+    text-color:                 @foreground-muted;
+    vertical-align:             0.5;
+    horizontal-align:           0.0;
+}
+
+listview {
+    enabled:                    true;
+    columns:                    1;
+    lines:                      8;
+    cycle:                      true;
+    dynamic:                    true;
+    fixed-height:               false;
+    scrollbar:                  false;
+    layout:                     vertical;
+    spacing:                    6px;
+    background-color:           transparent;
+    text-color:                 @foreground;
+    cursor:                     "default";
+}
+
+// Rows are cards: a faint surface each, 12px corners, a gap between them
+// (the tile language of the power panel). Inactive rows are muted; rows
+// marked active (-a: Bluetooth on, connected devices, visible on) take the
+// rice's accent, so state reads at a glance. The selection gets a stronger
+// surface and keeps the row's colour.
+element {
+    enabled:                    true;
+    padding:                    11px 12px;
+    border-radius:              12px;
+    background-color:           @surface-soft;
+    text-color:                 @foreground-muted;
+    cursor:                     pointer;
+}
+
+element normal.normal,
+element alternate.normal,
+element normal.urgent,
+element alternate.urgent {
+    background-color:           @surface-soft;
+    text-color:                 @foreground-muted;
+}
+
+element normal.active,
+element alternate.active {
+    background-color:           @surface-soft;
+    text-color:                 @active;
+}
+
+element selected.normal,
+element selected.urgent {
+    background-color:           @selected-soft;
+    text-color:                 @foreground;
+}
+
+element selected.active {
+    background-color:           @selected-soft;
+    text-color:                 @active;
+}
+
+element-text {
+    background-color:           transparent;
+    text-color:                 inherit;
+    cursor:                     inherit;
+    vertical-align:             0.5;
+    horizontal-align:           0.0;
+}
+
+error-message {
+    padding:                    12px;
+    border-radius:              10px;
+    background-color:           @background;
+    text-color:                 @foreground;
+}

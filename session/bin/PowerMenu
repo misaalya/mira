@@ -1,0 +1,90 @@
+#!/bin/sh
+# =============================================================
+# PowerMenu — Mira topbar power panel (Lock, Suspend, Log out,
+# Restart, Shut down) with confirmation on destructive actions.
+# Adapted from gh0stzk/dotfiles (GPL-3.0).
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-25 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
+theme="$MIRA_DIR/config/rofi/PowerMenu.rasi"
+
+pointer=
+[ "${1:-}" = --pointer ] && pointer=1
+
+BarPanel close-all >/dev/null 2>&1 || true
+
+side=east
+[ -n "$pointer" ] && side=pointer:340
+place=$(BarAnchor --rofi "$side" ${pointer:+--pointer})
+mon=${place%%
+*}
+place=${place#*
+}
+
+# One backdrop for the whole panel, confirmation step included, so the dim
+# does not flicker between the two clicks. Dropped before an action runs
+# (ScreenLocker screenshots the screen).
+bd=$(Backdrop ${pointer:+--pointer} --pid $$)
+drop_backdrop() {
+    [ -n "$bd" ] && kill "$bd" 2>/dev/null
+    bd=
+}
+trap drop_backdrop EXIT
+
+ic() { printf '<span font_desc="Material Design Icons Desktop 18">%s</span>\n' "$1"; }
+
+# Log out, Restart and Shut down end the session, so they take two clicks on
+# the same tile: the first arms it (selected, accent, its icon turns into a
+# check mark), the second runs it. The confirmation stays in place under the
+# pointer: a quick second click (double-click, bouncing button, touchpad tap)
+# lands on the same tile. A separate [action] [Cancel] dialog used to open
+# with Cancel right under the pointer and swallowed that click. Lock and
+# Suspend act at once; another destructive tile moves the arming there; Esc
+# or a click outside closes.
+icon() {
+    if [ "$1" = "$armed" ]; then
+        ic 󰄬
+    else
+        ic "$2"
+    fi
+}
+
+armed=
+while :; do
+    urgent=4
+    [ -n "$armed" ] && [ "$armed" != 4 ] && urgent="$armed,4"
+
+    choice=$(
+        {
+            ic 󰌾
+            ic 󰤄
+            icon 2 󰍃
+            icon 3 󰜉
+            icon 4 󰐥
+        } |
+        rofi -dmenu -markup-rows -format i -no-custom -window-title "Bar panel" \
+            -theme "$theme" ${mon:+-m "$mon"} ${place:+-theme-str "$place"} \
+            -u "$urgent" ${armed:+-selected-row "$armed"}
+    ) || exit 0
+
+    case $choice in
+        0 | 1) break ;;
+        2 | 3 | 4) [ "$choice" = "$armed" ] && break
+                   armed=$choice ;;
+        *) exit 0 ;;
+    esac
+done
+
+drop_backdrop
+case $choice in
+    0) ScreenLocker ;;
+    1) systemctl suspend ;;
+    2) bspc quit ;;
+    3) systemctl reboot ;;
+    4) systemctl poweroff ;;
+esac

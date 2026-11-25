@@ -1,0 +1,42 @@
+#!/bin/sh
+# =============================================================
+# StopBars — stop every polybar on this X display cleanly.
+# =============================================================
+
+DISPLAY=${DISPLAY:-:0}
+export DISPLAY
+
+bar_pids() {
+    for p in $(pgrep -x polybar 2>/dev/null); do
+        d=$(tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null |
+            sed -n 's/^DISPLAY=//p' | head -n 1)
+        [ "$d" = "$DISPLAY" ] || continue
+        printf '%s\n' "$p"
+    done
+}
+
+[ -n "$(bar_pids)" ] || exit 0
+
+polybar-msg cmd quit >/dev/null 2>&1 || true
+
+i=0
+while [ -n "$(bar_pids)" ]; do
+    i=$((i + 1))
+    [ "$i" -lt 10 ] || break
+    sleep 0.1
+done
+
+for p in $(bar_pids); do
+    kill "$p" 2>/dev/null || true
+done
+
+i=0
+while [ -n "$(bar_pids)" ]; do
+    i=$((i + 1))
+    [ "$i" -lt 10 ] || break
+    sleep 0.1
+done
+
+for p in $(bar_pids); do
+    kill -KILL "$p" 2>/dev/null || true
+done

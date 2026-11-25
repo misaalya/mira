@@ -1,0 +1,33 @@
+#!/bin/sh
+# Screenshot entry point for Mira keys and topbar button.
+#   Shot              interactive UI (Print)
+#   Shot --screen     monitor under pointer, no UI (Shift + Print)
+#   Shot --window     active window, no UI (Alt + Print)
+#   Shot --clipboard  interactive, copy to clipboard only (Ctrl + Print)
+
+MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
+CONF="$MIRA_DIR/config/x-shot.conf"
+
+if command -v x-shot >/dev/null 2>&1; then
+    if [ -r "$CONF" ]; then
+        exec x-shot --config "$CONF" "$@"
+    fi
+    exec x-shot "$@"
+fi
+
+# Minimal fallback when x-shot is not built yet.
+pics=$(xdg-user-dir PICTURES 2>/dev/null || true)
+[ -n "$pics" ] || pics="$HOME/Pictures"
+out_dir="$pics/ScreenShots"
+mkdir -p "$out_dir"
+out="$out_dir/shot-$(date +%Y%m%d-%H%M%S).png"
+
+case "${1:-}" in
+    --window)    maim -u -i "$(xdotool getactivewindow)" "$out" ;;
+    --clipboard) maim -u -s | xclip -selection clipboard -t image/png; exit ;;
+    --screen)    maim -u "$out" ;;
+    *)           maim -u -s "$out" ;;
+esac && {
+    xclip -selection clipboard -t image/png < "$out" 2>/dev/null || true
+    notify-send -a Shot "Screenshot saved" "$out" 2>/dev/null || true
+}

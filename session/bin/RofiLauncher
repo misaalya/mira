@@ -1,0 +1,56 @@
+#!/bin/sh
+# =============================================================
+# RofiLauncher — Mira drop-down application launcher.
+# Adapted from gh0stzk/dotfiles (GPL-3.0).
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-23 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
+ROFI_THEME="$MIRA_DIR/config/rofi/launcher.rasi"
+
+pointer=
+for arg in "$@"; do
+    [ "$arg" = --pointer ] && pointer=1
+done
+
+# Enforce single-popup exclusivity before launching.
+BarPanel close-all >/dev/null 2>&1 || true
+
+{ read -r mon; read -r place; } <<EOF
+$(BarAnchor --rofi west ${pointer:+--pointer})
+EOF
+
+bd=$(Backdrop ${pointer:+--pointer} --pid $$)
+# rofi -dmenu over our own app list (AppList) instead of -show drun: drun
+# runs whatever was typed when Enter finds no app (error dialog, launcher
+# closes); with -no-custom Enter on no match just does nothing. The window
+# keeps the "rofi - drun" title picom expects (dmenu titles the window
+# after the prompt, which the theme does not show).
+list="${XDG_RUNTIME_DIR:-/tmp}/mira-launcher.$$"
+trap 'rm -f "$list"' EXIT
+AppList >"$list"
+sel=$(cut -f3- "$list" | tr '\001' '\000' |
+    rofi -dmenu -no-custom -i -markup-rows -show-icons -format i \
+        -p drun \
+        -theme "$ROFI_THEME" ${mon:+-m "$mon"} ${place:+-theme-str "$place"})
+[ -n "$bd" ] && kill "$bd" 2>/dev/null || true
+
+case $sel in '' | *[!0-9]*) exit 0 ;; esac
+line=$(sed -n "$((sel + 1))p" "$list")
+id=$(printf '%s' "$line" | cut -f1)
+path=$(printf '%s' "$line" | cut -f2)
+[ -n "$path" ] || exit 0
+
+# Launch detached (gio handles Exec field codes, Terminal=, DBus activation).
+setsid -f gio launch "$path" >/dev/null 2>&1 </dev/null
+
+# Bump the launch count (same history file rofi drun uses, read by AppList).
+hist="${XDG_CACHE_HOME:-$HOME/.cache}/rofi3.druncache"
+mkdir -p "${hist%/*}"
+{ [ -f "$hist" ] && cat "$hist"; } |
+    awk -v id="$id" '$2 == id { $1++; f = 1 } NF { print } END { if (!f) print 1, id }' |
+    sort -k1,1nr >"$hist.$$" && mv -f "$hist.$$" "$hist"

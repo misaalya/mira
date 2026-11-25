@@ -1,0 +1,93 @@
+// Volume panel: opaque $bg, 14px corners, faint border; one soft block per
+// channel with a thick pill slider: white ($fg) fill, no knob.
+// Colours/fonts from colors.scss.
+
+.vol-panel {
+  font-family: $font;
+  background-color: $bg;
+  color: $fg;
+  border: 1px solid rgba($fg, 0.12);
+  border-radius: 14px;
+  padding: 14px 16px 12px 16px;
+  min-width: 320px;
+}
+
+.vol-title {
+  font-size: 15px;
+  font-weight: bold;
+  color: $fg;
+  padding-left: 2px;
+}
+
+.vol-gear {
+  font-family: "Material Design Icons Desktop";
+  font-size: 18px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  color: rgba($fg, 0.55);
+  &:hover { color: $fg; background-color: rgba($fg, 0.08); }
+}
+
+.vol-block {
+  padding: 10px 12px 12px 12px;
+  border-radius: 12px;
+  background-color: rgba($fg, 0.06);
+}
+
+.vol-icon {
+  font-family: "Material Design Icons Desktop";
+  font-size: 18px;
+  min-width: 26px;
+  padding: 0 2px;
+  border-radius: 8px;
+  color: $fg;
+  &:hover { background-color: rgba($fg, 0.10); }
+}
+
+.vol-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba($fg, 0.7);
+}
+
+.vol-num {
+  font-size: 13px;
+  font-weight: bold;
+  color: $fg;
+}
+
+// The pill: a thick rounded trough, the filled part in $fg, no knob.
+.vol-pill {
+  trough {
+    min-height: 26px;
+    border-radius: 13px;
+    background-color: rgba($fg, 0.14);
+  }
+  highlight {
+    min-height: 26px;
+    border-radius: 13px;
+    background-color: $fg;
+  }
+  slider {
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    background: none;
+    border: none;
+    box-shadow: none;
+  }
+}
+
+.vol-foot {
+  padding: 0 4px;
+  color: rgba($fg, 0.5);
+}
+
+.vol-foot-icon {
+  font-family: "Material Design Icons Desktop";
+  font-size: 14px;
+}
+
+.vol-dev {
+  font-size: 12px;
+}

@@ -1,0 +1,79 @@
+#!/bin/sh
+# =============================================================
+# Updates — Debian apt upgrade counter for Polybar IPC (zero polling).
+# Adapted from gh0stzk/dotfiles (GPL-3.0) for Debian 13.
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-23 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+UPDATE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/mira-updates.txt"
+
+sync_bars() {
+    if command -v polybar-msg >/dev/null 2>&1 && pgrep -x polybar >/dev/null 2>&1; then
+        polybar-msg action "#updates.hook.0" >/dev/null 2>&1 || true
+    fi
+}
+
+get_updates() {
+    tmp=$(mktemp) || return 1
+    apt-get -s upgrade >"$tmp" 2>/dev/null
+    status=$?
+    official_updates=$(sed -n 's/^Inst \([^ ]*\) .*/\1/p' "$tmp")
+    rm -f "$tmp"
+    [ "$status" -eq 0 ] || return 1
+    total=0
+    [ -n "$official_updates" ] && total=$(printf '%s\n' "$official_updates" | wc -l)
+}
+
+persist_results() {
+    mkdir -p "$(dirname "$UPDATE_FILE")"
+    printf '%s\n' "$total" > "$UPDATE_FILE"
+    sync_bars
+}
+
+list_updates() {
+    if get_updates; then
+        persist_results
+        offline=0
+    else
+        total=$(cat "$UPDATE_FILE" 2>/dev/null || echo 0)
+        offline=1
+    fi
+    total=${total:-0}
+    if [ "$total" -gt 0 ]; then
+        printf '\033[1m\033[33mThere are %s updates available:\033[0m\n' "$total"
+        if [ "$offline" -eq 1 ]; then
+            printf '\n\033[1m\033[31mNo internet connection or apt is busy.\033[0m\n'
+        else
+            printf '\n\033[1m\033[34mPackages:\033[0m\n'
+            printf '%s\n' "$official_updates"
+        fi
+    else
+        if [ "$offline" -eq 1 ]; then
+            printf '\033[1m\033[31mNo internet connection or apt is busy.\033[0m\n'
+        else
+            printf '\033[1m\033[32mYour system is already updated!\033[0m\n'
+        fi
+    fi
+}
+
+case "${1:-}" in
+    --cached)
+        [ -r "$UPDATE_FILE" ] && cat "$UPDATE_FILE" || printf '0\n'
+        ;;
+    --sync-bars|--sync-polybar)
+        get_updates && persist_results
+        ;;
+    --print-updates)
+        list_updates
+        printf '\n\033[2mPress Enter to close...\033[0m\n'
+        read -r _ </dev/tty 2>/dev/null || true
+        ;;
+    *)
+        printf 'Usage: Updates [--cached|--sync-bars|--print-updates]\n' >&2
+        exit 1
+        ;;
+esac

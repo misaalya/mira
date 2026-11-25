@@ -1,0 +1,30 @@
+#!/bin/sh
+# Brightness — backlight control & OSD trigger for Mira.
+
+get_pct() {
+    brightnessctl -m 2>/dev/null | awk -F, '{gsub(/%/,"",$4); print $4}' | head -n 1
+}
+
+notify_bri() {
+    v=$(get_pct)
+    [ -n "$v" ] || v=0
+    notify-send -a Brightness -h string:x-dunst-stack-tag:brightness -h int:value:"$v" -t 1600 "Brightness" "" 2>/dev/null
+}
+
+case "${1:-}" in
+    up)
+        brightnessctl set 5%+ -q >/dev/null 2>&1
+        notify_bri
+        ;;
+    down)
+        brightnessctl set 5%- -q >/dev/null 2>&1
+        notify_bri
+        ;;
+    get)
+        get_pct
+        ;;
+    *)
+        echo "usage: Brightness [up|down|get]" >&2
+        exit 1
+        ;;
+esac

@@ -1,0 +1,92 @@
+#!/bin/sh
+# Focus / swap along the scroll strip of the focused desktop, falling back
+# to plain bspwm tiling when that desktop is not in scroll mode.
+#
+#   ScrollKey focus  west|east|north|south
+#   ScrollKey swap   west|east|north|south
+#   ScrollKey resize west|east|north|south   (west = narrower, east = wider)
+#   ScrollKey preset prev|next               (cycle the preset column widths)
+#   ScrollKey float                          (toggle floating)
+#
+# Called from sxhkd (super + alt + arrows, super + shift + arrows,
+# super + ctrl + arrows, super + comma/period, super + v).
+
+STATE="${XDG_RUNTIME_DIR:-/tmp}/bspwm-scroll-$(id -u)"
+SELF=$(dirname "$0")
+
+action=$1
+dir=$2
+
+desk=$(bspc query -D -d focused --names 2>/dev/null)
+
+# The daemon keeps the FIFO open, so a keypress is a ~1 ms write instead of
+# starting the daemon binary.
+strip_cmd() {
+    pid=""
+    [ -p "$STATE/cmd.fifo" ] && read -r pid <"$STATE/pid" 2>/dev/null
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        printf '%s\n' "$1" >"$STATE/cmd.fifo"
+        return 0
+    fi
+    # $1 is deliberately split: "width grow" is a verb plus its argument.
+    # shellcheck disable=SC2086
+    "$SELF/Scroll" $1
+}
+
+if [ -n "$desk" ] && [ -e "$STATE/on-$desk" ]; then
+    case "$action:$dir" in
+        focus:west) strip_cmd left; exit 0 ;;
+        focus:east) strip_cmd right; exit 0 ;;
+        swap:west)  strip_cmd swap-left; exit 0 ;;
+        swap:east)  strip_cmd swap-right; exit 0 ;;
+        resize:west)  strip_cmd "width shrink"; exit 0 ;;
+        resize:east)  strip_cmd "width grow"; exit 0 ;;
+        resize:north|resize:south) exit 0 ;;  # strip columns always fill the height
+        preset:prev)  strip_cmd "width prev"; exit 0 ;;
+        preset:next)  strip_cmd "width next"; exit 0 ;;
+        # Columns are floating bspwm windows already: `~floating` would tile
+        # them underneath the strip. The daemon floats them off it instead.
+        float:*)      strip_cmd float; exit 0 ;;
+    esac
+else
+    # Column presets only mean something on the strip.
+    [ "$action" = preset ] && exit 0
+fi
+
+case "$action:$dir" in
+    float:*)
+        bspc node -t '~floating'
+        ;;
+    focus:west)
+        bspc node -f west.!sticky.!hidden.local ||
+            bspc node -f prev.leaf.!sticky.!hidden.local
+        ;;
+    focus:east)
+        bspc node -f east.!sticky.!hidden.local ||
+            bspc node -f next.leaf.!sticky.!hidden.local
+        ;;
+    focus:*)
+        bspc node -f "$dir.!sticky.!hidden.local"
+        ;;
+    swap:west)
+        bspc node -s west.local
+        ;;
+    swap:east)
+        bspc node -s east.local
+        ;;
+    swap:*)
+        bspc node -s "$dir.local"
+        ;;
+    resize:west)
+        bspc node -z right -40 0 || bspc node -z left 40 0
+        ;;
+    resize:east)
+        bspc node -z right 40 0 || bspc node -z left -40 0
+        ;;
+    resize:south)
+        bspc node -z bottom 0 40 || bspc node -z top 0 40
+        ;;
+    resize:north)
+        bspc node -z bottom 0 -40 || bspc node -z top 0 -40
+        ;;
+esac

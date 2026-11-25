@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mira" data-bar="mira-minimal">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Mira · BSPWM Desktop for Debian 13</title>
+  <meta name="description" content="A lightweight BSPWM desktop for Debian 13 (trixie): 200 MiB idle, zero-crate Rust daemons, GTK 3 overlays, five themes and Polybar layouts, and 3px Bayer GLSL live wallpapers.">
+  <meta name="theme-color" content="#08090d">
+  <meta property="og:title" content="Mira · BSPWM Desktop for Debian 13">
+  <meta property="og:description" content="200 MiB idle, zero-crate Rust and GTK 3, five themes and Polybar layouts, and 3px Bayer GLSL live wallpapers.">
+  <meta property="og:image" content="./assets/screenshots/overview.webp">
+  <meta property="og:type" content="website">
+  <link rel="icon" type="image/svg+xml" href="./assets/logo/mira-mark.svg?v=81">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./style.css?v=81">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <!-- Living Ordered-Bayer Pixel-Dithered Underwater Scene + Live GLSL Wallpapers -->
+  <div class="field-wrap" aria-hidden="true">
+    <canvas id="field-canvas"></canvas>
+    <canvas id="wall-canvas"></canvas>
+    <div class="bg-scrim"></div>
+    <div class="bg-scrim-veil" id="bg-scrim-veil"></div>
+  </div>
+
+  <!-- Navbar morphing across Mira's 5 Polybar geometries (same DNA on mobile) -->
+  <header class="site-nav" id="site-nav">
+    <div class="nav-bar">
+      <div class="nav-zone nav-left">
+        <a class="nav-brand" href="#top" aria-label="Mira home">
+          <svg class="nav-logo" viewBox="0 -70 490 250" shape-rendering="crispEdges" role="img" aria-label="Mira">
+            <path fill="currentColor" d="M0 10H10V0H40V10H50V20H60V30H70V20H80V10H90V0H120V10H130V180H100V30H90V40H80V50H70V60H60V50H50V40H40V30H30V180H0V10ZM160 0H190V180H160V0ZM220 0H300V10H310V20H320V70H310V80H300V100H310V110H320V180H290V110H280V100H270V90H250V180H220V0ZM250 20V70H290V20H250ZM350 30H360V20H370V10H380V0H420V10H430V20H440V30H450V180H420V120H380V180H350V30ZM380 30V100H420V30H410V20H390V30H380Z"/>
+            <path class="nav-star" d="M420 -30H440V-40H450V-70H460V-40H470V-30H490V-20H470V-10H460V20H450V-10H440V-20H420V-30Z"/>
+          </svg>
+        </a>
+      </div>
+
+      <nav class="nav-zone nav-links" aria-label="Primary">
+        <a href="#desktop" data-sec="desktop">Desktop</a>
+        <a href="#halftone" data-sec="halftone">Shaders</a>
+        <a href="#install" data-sec="install">Install</a>
+        <button type="button" class="nav-link-btn" id="nav-open-themes">Themes</button>
+        <button type="button" class="nav-link-btn" id="nav-open-walls">Wallpapers</button>
+      </nav>
+
+      <div class="nav-zone nav-actions">
+        <a class="nav-gh" href="https://github.com/misaalya/mira" target="_blank" rel="noopener noreferrer" aria-label="Source on GitHub">
+          <svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          <span>GitHub</span>
+          <svg class="ico-arr nav-ext" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 11L11 5M6 5h5v5"/></svg>
+        </a>
+        <a class="nav-cta" href="#install">
+          <svg class="ico-arr nav-term" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 5l3.5 3-3.5 3M8.5 11h4"/></svg>
+          <span>Install</span>
+        </a>
+        <button type="button" class="nav-menu-btn" id="nav-menu-btn" aria-expanded="false" aria-controls="nav-drawer" aria-label="Toggle navigation menu">
+          <span class="nav-menu-bars" aria-hidden="true"><i></i><i></i></span>
+        </button>
+      </div>
+    </div>
+
+    <nav class="nav-drawer" id="nav-drawer" hidden aria-label="Navigation menu">
+      <div class="nav-drawer-inner">
+        <a href="#desktop" data-sec="desktop">Desktop</a>
+        <a href="#halftone" data-sec="halftone">Shaders</a>
+        <a href="#install" data-sec="install">Install</a>
+        <div class="nav-drawer-sep" aria-hidden="true"></div>
+        <button type="button" class="nav-drawer-btn" id="drawer-open-themes">Themes <kbd>T</kbd></button>
+        <button type="button" class="nav-drawer-btn" id="drawer-open-walls">Wallpapers <kbd>W</kbd></button>
+        <a class="nav-drawer-ext" href="https://github.com/misaalya/mira" target="_blank" rel="noopener noreferrer">
+          GitHub
+          <svg class="ico-arr" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 11L11 5M6 5h5v5"/></svg>
+        </a>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main">
+    <!-- SLIDE 1: HERO -->
+    <section class="hero snap-sec" id="top">
+      <div class="hero-core">
+        <h1 class="wordmark-box" aria-label="Mira">
+          <svg class="wordmark" viewBox="0 -70 490 250" shape-rendering="crispEdges" role="img" aria-label="Mira">
+            <path fill="currentColor" d="M0 10H10V0H40V10H50V20H60V30H70V20H80V10H90V0H120V10H130V180H100V30H90V40H80V50H70V60H60V50H50V40H40V30H30V180H0V10ZM160 0H190V180H160V0ZM220 0H300V10H310V20H320V70H310V80H300V100H310V110H320V180H290V110H280V100H270V90H250V180H220V0ZM250 20V70H290V20H250ZM350 30H360V20H370V10H380V0H420V10H430V20H440V30H450V180H420V120H380V180H350V30ZM380 30V100H420V30H410V20H390V30H380Z"/>
+            <g class="wm-star">
+              <path class="s0" d="M420 -30H440V-40H450V-70H460V-40H470V-30H490V-20H470V-10H460V20H450V-10H440V-20H420V-30Z"/>
+              <path class="s1" d="M430 -30H450V-50H460V-30H480V-20H460V0H450V-20H430V-30Z"/>
+              <path class="s2" d="M440 -30H450V-40H460V-30H470V-20H460V-10H450V-20H440V-30Z"/>
+            </g>
+            <rect class="wm-star-hit" x="420" y="-70" width="70" height="90"/>
+          </svg>
+        </h1>
+
+        <p class="hero-line">Lightweight BSPWM desktop for Debian&nbsp;13.</p>
+
+        <div class="hero-links">
+          <a class="hero-link hero-link-primary" href="#install">
+            <span>Install</span>
+            <svg class="ico-arr" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9M8.5 4l4 4-4 4"/></svg>
+          </a>
+          <span class="hero-sep" aria-hidden="true"></span>
+          <button type="button" class="hero-link" id="hero-open-walls">
+            <span>Wallpapers</span>
+          </button>
+          <span class="hero-sep" aria-hidden="true"></span>
+          <button type="button" class="hero-link" id="hero-open-themes">
+            <span>Themes</span>
+          </button>
+        </div>
+      </div>
+
+      <p class="hero-foot">200 MiB idle · Rust &amp; C · Five themes &amp; bars · GPL-3.0</p>
+    </section>
+
+    <!-- SLIDE 2: DESKTOP STAGE & LIVE POLYBAR MORPH -->
+    <section class="sec snap-sec" id="desktop">
+      <div class="wrap">
+        <header class="sec-head">
+          <h2>Built for Debian 13.<br><span class="dim">X11, BSPWM, and native Rust &amp; C.</span></h2>
+          <p class="lede">
+            Session scripts adapted from <a href="https://github.com/gh0stzk/dotfiles" target="_blank" rel="noopener noreferrer">gh0stzk/dotfiles</a>,
+            paired with five original themes, five Polybar geometries, and custom native tooling.
+          </p>
+        </header>
+
+        <div class="stage">
+          <div class="stage-list" id="stage-tabs" role="tablist" aria-orientation="vertical" aria-label="Desktop views">
+            <button type="button" class="view is-active" role="tab" aria-selected="true" aria-controls="stage-monitor" data-shot="0" data-src="./assets/screenshots/overview.webp" data-fit="top">
+              <span class="tnum">01</span><span class="view-name">Overview</span>
+              <span class="view-cap">Tiled BSPWM desktop, Rofi launcher, notification center, and wallpaper gallery.</span>
+            </button>
+            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="1" data-src="./assets/screenshots/scroll-layout.webp" data-fit="top">
+              <span class="tnum">02</span><span class="view-name">Scrolling</span>
+              <span class="view-cap">Hyprland-style horizontal scrolling columns managed by misa-scroll.</span>
+            </button>
+            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="2" data-src="./assets/screenshots/launcher.webp" data-fit="left">
+              <span class="tnum">03</span><span class="view-name">Launcher</span>
+              <span class="view-cap">Rofi application launcher anchored beneath Polybar, sorted by usage.</span>
+            </button>
+            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="3" data-src="./assets/screenshots/notification-center.webp" data-fit="right">
+              <span class="tnum">04</span><span class="view-name">Notifications</span>
+              <span class="view-cap">Native C/GTK3 NotifPanel with Do Not Disturb toggle, toasts, and OSD.</span>
+            </button>
+            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="4" data-src="./assets/screenshots/clipboard.webp" data-fit="left">
+              <span class="tnum">05</span><span class="view-name">Clipboard</span>
+              <span class="view-cap">Text and PNG clipboard history powered by misa-clip and ClipPanel.</span>
+            </button>
+            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="5" data-src="./assets/screenshots/wallpaper-picker.webp" data-fit="top">
+              <span class="tnum">06</span><span class="view-name">WallSelect</span>
+              <span class="view-cap">CardPicker gallery mode powering WallSelect over a live 3px Bayer shader wallpaper.</span>
+            </button>
+            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="6" data-src="./assets/screenshots/theme-picker.webp" data-fit="top">
+              <span class="tnum">07</span><span class="view-name">RiceSelector</span>
+              <span class="view-cap">CardPicker showcase mode powering RiceSelector across all five themes.</span>
+            </button>
+          </div>
+          <div class="stage-view">
+            <div class="stage-monitor" id="stage-monitor" role="tabpanel" data-fit="top">
+              <img class="stage-shot" id="stage-shot" src="./assets/screenshots/overview.webp" alt="Tiled BSPWM desktop, Rofi launcher, notification center, and wallpaper gallery.">
+            </div>
+            <div class="stage-keys">
+              <button type="button" class="kbtn" id="stage-zoom" aria-label="View screenshot fullscreen">
+                <span class="kcap kcap-ico"><svg class="kico kico-line" viewBox="0 0 10 10" aria-hidden="true"><path d="M1 3.8V1h2.8M6.2 1H9v2.8M9 6.2V9H6.2M3.8 9H1V6.2"/></svg></span>
+                <span class="klbl">Inspect</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="bar-live">
+          <div class="bar-strip-frame" id="bar-inspect" role="button" tabindex="0" aria-label="Inspect the Polybar layout">
+            <img class="bar-strip-img" id="stage-bar" src="./assets/bars/mira-minimal.webp" alt="Active Polybar layout">
+          </div>
+          <div class="bar-switcher" role="group" aria-label="Switch Polybar layout">
+            <button type="button" class="bsw" data-pick-bar="mira">
+              <svg class="bsw-ico" viewBox="0 0 28 8" aria-hidden="true"><rect x="0.5" y="1" width="27" height="6" rx="1"/></svg>
+              <span>Mira</span>
+            </button>
+            <button type="button" class="bsw" data-pick-bar="mira-float">
+              <svg class="bsw-ico" viewBox="0 0 28 8" aria-hidden="true"><rect x="3" y="1.5" width="22" height="5" rx="2"/></svg>
+              <span>Float</span>
+            </button>
+            <button type="button" class="bsw" data-pick-bar="mira-islands">
+              <svg class="bsw-ico" viewBox="0 0 28 8" aria-hidden="true"><rect x="1" y="1.5" width="6.5" height="5" rx="2.5"/><rect x="10.2" y="1.5" width="7.6" height="5" rx="2.5"/><rect x="20.5" y="1.5" width="6.5" height="5" rx="2.5"/></svg>
+              <span>Islands</span>
+            </button>
+            <button type="button" class="bsw" data-pick-bar="mira-line">
+              <svg class="bsw-ico" viewBox="0 0 28 8" aria-hidden="true"><rect x="0.5" y="1" width="27" height="4.5" rx="0.5"/><line x1="8" y1="7.2" x2="20" y2="7.2" stroke="currentColor" stroke-width="1.3"/></svg>
+              <span>Line</span>
+            </button>
+            <button type="button" class="bsw is-active" data-pick-bar="mira-minimal">
+              <svg class="bsw-ico bsw-ico-thin" viewBox="0 0 28 8" aria-hidden="true"><line x1="1.5" y1="4" x2="26.5" y2="4" stroke-linecap="round"/></svg>
+              <span>Minimal</span>
+            </button>
+          </div>
+          <span class="micro-label bar-hint">Select a layout to preview it on the top bar</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- LIVE SHADER & LUMA-HALFTONE DEVELOP LAB -->
+    <section class="sec snap-sec" id="halftone">
+      <div class="wrap">
+        <header class="sec-head">
+          <h2>Live wallpapers.<br><span class="dim">3px Bayer shaders in GLSL.</span></h2>
+          <p class="lede">
+            Ten animated wallpapers rendered at 1:1 cell resolution in <code>misa-wall</code>, using a luminance-weighted halftone transition between themes.
+          </p>
+        </header>
+
+        <div class="lab">
+          <div class="lab-rail">
+            <div class="lab-stops" role="group" aria-label="Live theme shaders">
+              <button type="button" class="lab-stop is-active" data-pick-theme="mira">
+                <span class="tnum">01</span><span class="lab-name">Mira</span><span class="lab-wall">Obsidian Rain Alley</span>
+              </button>
+              <button type="button" class="lab-stop" data-pick-theme="matcha">
+                <span class="tnum">02</span><span class="lab-name">Matcha</span><span class="lab-wall">Arashiyama Tea Veranda</span>
+              </button>
+              <button type="button" class="lab-stop" data-pick-theme="ember">
+                <span class="tnum">03</span><span class="lab-name">Ember</span><span class="lab-wall">Crimson Harbor Pier</span>
+              </button>
+              <button type="button" class="lab-stop" data-pick-theme="fjord">
+                <span class="tnum">04</span><span class="lab-name">Fjord</span><span class="lab-wall">Blue-Hour Fjord Boathouse</span>
+              </button>
+              <button type="button" class="lab-stop" data-pick-theme="aria">
+                <span class="tnum">05</span><span class="lab-name">Aria</span><span class="lab-wall">Aurora Rooftop Observatory</span>
+              </button>
+            </div>
+            <div class="lab-track" id="lab-track">
+              <span class="lab-fill" aria-hidden="true"></span>
+              <input type="range" id="bg-scrubber" class="lab-range" min="0" max="500" step="1" value="0" aria-label="Halftone transition across the five themes" aria-valuetext="Mira">
+              <span class="lab-pct" id="scrub-readout" aria-hidden="true">0%</span>
+            </div>
+          </div>
+
+          <div class="lab-keys">
+            <div class="lab-keygroup" role="group" aria-label="Transition playback">
+              <button type="button" class="kbtn" id="btn-scrub-play">
+                <span class="kcap kcap-ico"><svg class="kico kico-play" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 .8L9 5 2 9.2z"/></svg><svg class="kico kico-stop" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.6 1.6h6.8v6.8H1.6z"/></svg></span>
+                <span class="klbl"><span class="kl-play">Play</span><span class="kl-stop">Stop</span></span>
+              </button>
+              <button type="button" class="kbtn" id="btn-scrub-hold" aria-label="Hold the transition at 45%">
+                <span class="kcap kcap-ico"><svg class="kico" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 1h2.6v8H1.5zm4.4 0h2.6v8H5.9z"/></svg></span>
+                <span class="klbl">45%</span>
+              </button>
+            </div>
+            <div class="lab-keygroup">
+              <button type="button" class="kbtn" id="btn-open-themes">
+                <span class="kcap">T</span>
+                <span class="klbl">Themes</span>
+              </button>
+              <button type="button" class="kbtn" id="btn-open-walls">
+                <span class="kcap">W</span>
+                <span class="klbl">Wallpapers</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SLIDE 3: INSTALL -->
+    <section class="sec snap-sec sec-install" id="install">
+      <div class="wrap install-wrap">
+        <div class="install-body">
+          <header class="sec-head sec-head-row">
+            <div>
+              <h2>Install Mira.<br><span class="dim">Debian 13 · X11 &amp; SDDM.</span></h2>
+              <p class="lede">
+                Everything else comes from Debian. Install
+                <a href="https://github.com/elkowar/eww" target="_blank" rel="noopener noreferrer">Eww</a>,
+                <a href="https://ghostty.org" target="_blank" rel="noopener noreferrer">Ghostty</a> and
+                <a href="https://www.nerdfonts.com" target="_blank" rel="noopener noreferrer">JetBrainsMono Nerd Font</a> separately;
+                <a href="https://github.com/sxyazi/yazi" target="_blank" rel="noopener noreferrer">yazi</a> is optional.
+              </p>
+            </div>
+            <div class="install-links">
+              <button type="button" class="text-act" id="btn-copy-install">Copy 01–04</button>
+              <span class="act-sep" aria-hidden="true"></span>
+              <a class="text-act" href="https://github.com/misaalya/mira#installation" target="_blank" rel="noopener noreferrer">README ↗</a>
+            </div>
+          </header>
+
+          <ol class="steps" id="install-list" aria-label="Install steps">
+            <li>
+              <button type="button" class="step" data-copy="git clone https://github.com/misaalya/mira.git &amp;&amp; cd mira">
+                <span class="step-n">01</span><code class="step-cmd">git clone https://github.com/misaalya/mira.git &amp;&amp; cd mira</code><span class="step-note">Clone the repository</span><span class="step-act">Copy</span>
+              </button>
+            </li>
+            <li>
+              <button type="button" class="step" data-copy="sudo ./tools/setup.sh">
+                <span class="step-n">02</span><code class="step-cmd">sudo ./tools/setup.sh</code><span class="step-note">Debian 13 packages, touchpad &amp; SDDM session</span><span class="step-act">Copy</span>
+              </button>
+            </li>
+            <li>
+              <button type="button" class="step" data-copy="./tools/build.sh">
+                <span class="step-n">03</span><code class="step-cmd">./tools/build.sh</code><span class="step-note">Offline build of the Rust &amp; GTK 3 tools</span><span class="step-act">Copy</span>
+              </button>
+            </li>
+            <li class="is-opt">
+              <button type="button" class="step" data-copy="./tools/dev-session.sh">
+                <span class="step-n" aria-hidden="true"></span><code class="step-cmd">./tools/dev-session.sh</code><span class="step-note">Optional · try it in Xephyr on :9 first</span><span class="step-act">Copy</span>
+              </button>
+            </li>
+            <li>
+              <button type="button" class="step" data-copy="./tools/deploy.sh">
+                <span class="step-n">04</span><code class="step-cmd">./tools/deploy.sh</code><span class="step-note">Install into ~/.config/bspwm (keeps theme &amp; bar)</span><span class="step-act">Copy</span>
+              </button>
+            </li>
+            <li class="is-end">
+              <p class="step step-static"><span class="step-n">05</span><span class="step-text">Log out, then pick <strong>Mira (BSPWM)</strong> in SDDM.</span></p>
+            </li>
+          </ol>
+        </div>
+
+        <footer class="site-foot">
+          <span>© 2026 Misaalya · <a href="https://github.com/misaalya/mira/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GPL-3.0-only</a></span>
+          <span>
+            Credits:
+            <a href="https://github.com/gh0stzk/dotfiles" target="_blank" rel="noopener noreferrer">gh0stzk/dotfiles</a> ·
+            <a href="https://github.com/parazeeknova/doty" target="_blank" rel="noopener noreferrer">doty</a> ·
+            <a href="https://codeberg.org/LGFae/awww" target="_blank" rel="noopener noreferrer">swww/awww</a> ·
+            <a href="https://codeberg.org/justaguylinux/bspwm-setup" target="_blank" rel="noopener noreferrer">bspwm-setup</a> ·
+            <a href="https://github.com/ArnaudLelievre48/Minimizing-BSPWM" target="_blank" rel="noopener noreferrer">Minimizing-BSPWM</a> ·
+            <a href="https://pictogrammers.com/library/mdi/" target="_blank" rel="noopener noreferrer">MDI</a> ·
+            <a href="https://github.com/hunkyburrito/xdg-desktop-portal-termfilechooser" target="_blank" rel="noopener noreferrer">termfilechooser</a>
+          </span>
+        </footer>
+      </div>
+    </section>
+  </main>
+
+  <!-- Authentic Mira Overlays (W = WallSelect, T = RiceSelector, Lightbox) -->
+  <div class="mira-ov ov-dock" id="ov-walls" hidden role="dialog" aria-modal="true" aria-label="WallSelect gallery">
+    <div class="ov-back ov-back-clear" data-close></div>
+    <div class="dock">
+      <div class="dock-head">
+        <div class="dock-info">
+          <div class="dock-title-row">
+            <strong id="wd-title">Mira · wall-01</strong>
+            <span class="inuse-tag" id="wd-badge">IN USE</span>
+          </div>
+          <div class="dock-meta-row">
+            <span id="wd-meta">Live 3px Bayer shader · Obsidian Rain Alley</span>
+          </div>
+        </div>
+        <div class="ov-keys">
+          <button type="button" class="kbtn" id="wd-key-apply">
+            <span class="kcap">Enter</span>
+            <span class="klbl">Apply</span>
+          </button>
+          <span class="kbtn kbtn-static">
+            <span class="kcap kcap-ico" aria-label="Left and right arrows">
+              <svg class="ico-arr" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5L5.5 8 10 12.5"/></svg>
+              <svg class="ico-arr" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5"/></svg>
+            </span>
+            <span class="klbl">Move</span>
+          </span>
+          <button type="button" class="kbtn" data-close>
+            <span class="kcap">Esc</span>
+            <span class="klbl">Close</span>
+          </button>
+        </div>
+        <div class="ov-touch-bar">
+          <button type="button" class="ov-touch-apply" id="wd-apply-btn">Apply</button>
+          <button type="button" class="ov-touch-close" data-close aria-label="Close wallpaper picker">Esc</button>
+        </div>
+      </div>
+      <div class="dock-strip" id="wd-strip" role="listbox"></div>
+    </div>
+  </div>
+
+  <div class="mira-ov ov-themes-sheet" id="ov-themes" hidden role="dialog" aria-modal="true" aria-label="RiceSelector theme picker">
+    <div class="ov-back" data-close></div>
+    <div class="showcase">
+      <div class="showcase-mob-head">
+        <span class="showcase-mob-title">Themes</span>
+        <button type="button" class="ov-touch-close" data-close aria-label="Close theme picker">Esc</button>
+      </div>
+      <div class="showcase-list" id="tp-list" role="listbox"></div>
+      <div class="showcase-stage" id="tp-stage">
+        <canvas class="showcase-canvas" id="tp-canvas" aria-label="Live theme wallpaper preview"></canvas>
+        <img class="showcase-bar" id="tp-bar" src="./assets/bars/mira.webp" alt="Bar preview">
+        <div class="showcase-cap">
+          <strong id="tp-name">Mira</strong>
+          <span id="tp-sub">Monochrome obsidian · acid yellow · mira</span>
+        </div>
+      </div>
+      <div class="showcase-mob-foot">
+        <button type="button" class="ov-touch-apply showcase-mob-apply" id="tp-apply-btn">Apply theme</button>
+      </div>
+    </div>
+    <div class="ov-keys ov-corner">
+      <button type="button" class="kbtn" id="tp-key-apply">
+        <span class="kcap">Enter</span>
+        <span class="klbl">Apply</span>
+      </button>
+      <span class="kbtn kbtn-static">
+        <span class="kcap kcap-ico" aria-label="Up and down arrows">
+          <svg class="ico-arr" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 10L8 5.5 12.5 10"/></svg>
+          <svg class="ico-arr" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 6L8 10.5 12.5 6"/></svg>
+        </span>
+        <span class="klbl">Move</span>
+      </span>
+      <button type="button" class="kbtn" data-close>
+        <span class="kcap">Esc</span>
+        <span class="klbl">Back</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="mira-ov ov-lb" id="ov-lb" hidden role="dialog" aria-modal="true" aria-label="Screenshot viewer">
+    <div class="ov-back" data-close></div>
+    <button type="button" class="ov-touch-close ov-lb-close" data-close aria-label="Close fullscreen preview">Esc</button>
+    <img id="lb-img" src="" alt="">
+    <p id="lb-cap"></p>
+    <div class="ov-keys ov-corner">
+      <button type="button" class="kbtn" data-close>
+        <span class="kcap">Esc</span>
+        <span class="klbl">Close</span>
+      </button>
+    </div>
+  </div>
+
+  <button type="button" class="live-hud" id="live-bg-pill" hidden aria-label="Return to scroll scene">
+    <span>Scroll scene</span>
+    <svg class="hud-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8a4.5 4.5 0 1 0 1.3-3.2M3.5 3.5v2.8h2.8"/></svg>
+  </button>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="./wall-shaders.js?v=81" defer></script>
+  <script src="./app.js?v=81" defer></script>
+</body>
+</html>

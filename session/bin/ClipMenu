@@ -1,0 +1,17 @@
+#!/bin/sh
+# Clipboard history (super + alt + c, or the clipboard icon on the bar with
+# --pointer): opens the resident GTK3 ClipPanel over misa-clip.
+
+if ! command -v misa-clip >/dev/null 2>&1 || ! misa-clip ping 2>/dev/null; then
+    notify-send -a misa-clip "Clipboard" "misa-clip is not running" 2>/dev/null
+    exit 1
+fi
+
+run="${XDG_RUNTIME_DIR:-/tmp}"
+fifo="$run/clip-panel.fifo"
+pid=$(cat "$run/clip-panel.pid" 2>/dev/null)
+if [ -p "$fifo" ] && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    printf 'open %s\n' "$*" >"$fifo"
+    exit 0
+fi
+exec "${0%/*}/ClipPanel" "$@"

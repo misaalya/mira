@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" shape-rendering="crispEdges" role="img" aria-label="Mira">
+  <title>Mira</title>
+  <style>
+    .s { fill: #c4b816; }
+    @media (prefers-color-scheme: dark) { .s { fill: #d9d84a; } }
+  </style>
+  <path class="s" d="M15 45H35V35H45V5H55V35H65V45H85V55H65V65H55V95H45V65H35V55H15V45Z"/>
+</svg>

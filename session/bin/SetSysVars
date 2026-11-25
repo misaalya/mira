@@ -1,0 +1,113 @@
+#!/bin/sh
+# =============================================================
+# SetSysVars — Detect network, backlight, and battery paths for Polybar.
+# Adapted from gh0stzk/dotfiles (GPL-3.0).
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-23 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
+CONFIG_FILE="$MIRA_DIR/config/system.ini"
+SFILE="$MIRA_DIR/config/.sys"
+
+mkdir -p "$MIRA_DIR/config"
+if [ ! -f "$CONFIG_FILE" ]; then
+    cat >"$CONFIG_FILE" <<'EOF'
+[system]
+sys_network_interface =
+sys_graphics_card =
+sys_battery =
+sys_adapter =
+EOF
+fi
+
+wait_for_network() {
+    i=0
+    while [ "$i" -lt 20 ]; do
+        ip route show default 2>/dev/null | grep -q default && return 0
+        i=$((i + 1))
+        sleep 0.25
+    done
+    return 1
+}
+
+update_config() {
+    tmpfile=$(mktemp "${CONFIG_FILE}.XXXXXX") || return 1
+    awk -v net="$1" -v card="$2" -v bat="$3" -v adap="$4" \
+        -v do_net="$5" -v do_static="$6" '
+        do_net == "1" && /^sys_network_interface =/ { $0 = "sys_network_interface = " net }
+        do_static == "1" && /^sys_graphics_card =/   { $0 = "sys_graphics_card = " card }
+        do_static == "1" && /^sys_battery =/          { $0 = "sys_battery = " bat }
+        do_static == "1" && /^sys_adapter =/          { $0 = "sys_adapter = " adap }
+        { print }
+    ' "$CONFIG_FILE" > "$tmpfile" && mv "$tmpfile" "$CONFIG_FILE"
+}
+
+# The interface polybar watches. The default route only exists once a
+# connection is up, which at login is often not yet the case (Wi-Fi still
+# associating): fall back to the wireless interface, then to any
+# non-loopback one, so the module never gets an empty interface.
+detect_network() {
+    dev=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+    if [ -z "$dev" ]; then
+        for d in /sys/class/net/*; do
+            [ -d "$d/wireless" ] && { dev=${d##*/}; break; }
+        done
+    fi
+    if [ -z "$dev" ]; then
+        for d in /sys/class/net/*; do
+            [ "${d##*/}" = lo ] || { dev=${d##*/}; break; }
+        done
+    fi
+    printf '%s' "$dev"
+}
+
+detect_graphics_card() {
+    for entry in /sys/class/backlight/*; do
+        [ -d "$entry" ] && { basename "$entry"; return; }
+    done
+    printf '%s' ""
+}
+
+detect_battery() {
+    for entry in /sys/class/power_supply/*; do
+        [ -d "$entry" ] || continue
+        entry_name=$(basename "$entry")
+        case "$entry_name" in
+            *BAT*) printf '%s' "$entry_name"; return ;;
+        esac
+    done
+    printf '%s' ""
+}
+
+detect_adapter() {
+    for entry in /sys/class/power_supply/*; do
+        [ -d "$entry" ] || continue
+        entry_name=$(basename "$entry")
+        case "$entry_name" in
+            *AC*|*ADP*) printf '%s' "$entry_name"; return ;;
+        esac
+    done
+    printf '%s' ""
+}
+
+wait_for_network || true
+primary_net=$(detect_network)
+
+# Never replace a known interface with nothing.
+do_net=1
+[ -n "$primary_net" ] || do_net=0
+
+if [ -f "$SFILE" ]; then
+    update_config "$primary_net" "" "" "" "$do_net" 0
+else
+    card=$(detect_graphics_card)
+    battery=$(detect_battery)
+    adapter=$(detect_adapter)
+    if update_config "$primary_net" "$card" "$battery" "$adapter" "$do_net" 1; then
+        touch "$SFILE"
+    fi
+fi

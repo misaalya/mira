@@ -1,0 +1,26 @@
+#!/bin/sh
+# =============================================================
+# SddmBackground WALLPAPER — blurred copy of the wallpaper for the
+# Mira SDDM theme (sddm/mira). SDDM runs as its own user and cannot
+# read $HOME, so the copy goes to /var/lib/mira-sddm, which
+# tools/sddm-theme.sh creates and gives to this user. Does nothing
+# when the theme is not installed.
+# Copyright (C) 2026 Misaalya
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+dir=/var/lib/mira-sddm
+wall=$1
+[ -d "$dir" ] && [ -w "$dir" ] && [ -f "$wall" ] || exit 0
+command -v convert >/dev/null 2>&1 || exit 0
+
+out="$dir/background.jpg"
+# Same wallpaper as last time and not edited since: nothing to do.
+[ "$(cat "$dir/source" 2>/dev/null)" = "$wall" ] && [ "$out" -nt "$wall" ] && exit 0
+
+tmp="$dir/.background.$$.jpg"
+trap 'rm -f "$tmp"' EXIT
+# Shrink, blur and scale back up: a strong blur for little CPU.
+nice -n 10 convert "${wall}[0]" -resize '1920x1080^' -gravity center -extent 1920x1080 \
+    -resize 12.5% -blur 0x4 -resize 800% -quality 88 "$tmp" 2>/dev/null &&
+    chmod 644 "$tmp" && mv -f "$tmp" "$out" &&
+    printf '%s\n' "$wall" >"$dir/source"

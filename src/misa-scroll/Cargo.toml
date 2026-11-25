@@ -1,0 +1,22 @@
+[package]
+name = "misa-scroll"
+version = "0.1.0"
+edition = "2021"
+description = "Hyprland-style scrolling columns for bspwm (bin/Scroll)"
+authors = ["Misaalya"]
+license = "GPL-3.0-only"
+
+# No crates: bspwm's socket through std, poll/mkfifo/signal/Xlib through FFI
+# (offline build, small binary, ~1 MB resident).
+[dependencies]
+
+[[bin]]
+name = "Scroll"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

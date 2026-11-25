@@ -1,0 +1,72 @@
+;; Volume panel of the top bar: a title, one block per channel (name, value)
+;; with a thick pill slider (white fill, no knob, like a phone's control
+;; centre). Click or drag anywhere on the pill. Opened by `VolumeCtl popup`
+;; under the bar; polls run only while it is open.
+
+(defpoll vol     :interval "1s"
+                 :initial "{\"vol\":0,\"mute\":false,\"mic\":0,\"micmute\":false}"
+                 "VolumeCtl state")
+(defpoll vol-dev :interval "5s" :initial "" "VolumeCtl device")
+
+;; Muted blocks are dimmed with :style, not a class: eww 0.6 never removes a
+;; class that :class added before, so a "muted" class would stick.
+(defwidget vol-meter [value onchange]
+  (eventbox :cursor "pointer" :hexpand true
+    (scale :class "vol-pill"
+           :hexpand true
+           :min 0
+           :max 101
+           :value value
+           :onchange onchange)))
+
+(defwidget vol-block [name icon value muted onicon onchange tip]
+  (box :class "vol-block"
+       :orientation "v"
+       :space-evenly false
+       :spacing 8
+       :style {muted ? "opacity: 0.4" : "opacity: 1"}
+    (box :space-evenly false :spacing 8
+      (eventbox :cursor "pointer"
+        (button :class "vol-icon" :onclick onicon :tooltip tip icon))
+      (label :class "vol-name" :hexpand true :xalign 0 :valign "center"
+             :text {muted ? "${name} · Muted" : name})
+      (label :class "vol-num" :text "${value}%"))
+    (vol-meter :value value :onchange onchange)))
+
+(defwidget volume-panel []
+  (box :class "vol-panel"
+       :orientation "v"
+       :space-evenly false
+       :spacing 14
+    (box :class "vol-head" :space-evenly false :spacing 10
+      (label :class "vol-title" :halign "start" :hexpand true :text "Sound")
+      (eventbox :cursor "pointer"
+        (button :class "vol-gear"
+                :tooltip "Sound settings"
+                :onclick "VolumeCtl close; pavucontrol &"
+                "󰒓")))
+    (vol-block :name "Output"
+               :icon {vol.mute ? "󰝟" : vol.vol > 66 ? "󰕾" : vol.vol > 33 ? "󰖀" : "󰕿"}
+               :value {vol.vol}
+               :muted {vol.mute}
+               :tip "Mute output"
+               :onicon "VolumeCtl mute"
+               :onchange "VolumeCtl set {}")
+    (vol-block :name "Microphone"
+               :icon {vol.micmute ? "󰍭" : "󰍬"}
+               :value {vol.mic}
+               :muted {vol.micmute}
+               :tip "Mute microphone"
+               :onicon "VolumeCtl micmute"
+               :onchange "VolumeCtl mic {}")
+    (box :class "vol-foot" :space-evenly false :spacing 8
+      (label :class "vol-foot-icon" :text "󰓃")
+      (label :class "vol-dev" :halign "start" :hexpand true :xalign 0
+             :limit-width 38 :text vol-dev))))
+
+;; Position/monitor are given by `VolumeCtl popup` (--screen/--pos).
+(defwindow volume
+  :geometry (geometry :anchor "top right" :x "8px" :y "52px")
+  :stacking "fg"
+  :wm-ignore true
+  (volume-panel))

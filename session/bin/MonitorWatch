@@ -1,0 +1,38 @@
+#!/bin/bash
+# MonitorWatch - re-apply the monitor layout when a monitor is plugged in or
+# out, so `bspc wm -r` is no longer needed by hand.
+#
+# bspwm only follows outputs that xrandr has enabled, and MonitorSetup (which
+# enables them, stacks them and gives each its desktops) runs once, from
+# bspwmrc. This watcher sleeps on RandR events (xev, no polling). After a
+# burst of events settles it compares the set of *connected* outputs with the
+# last one; only when that set changed does it reload bspwm (`bspc wm -r`),
+# which runs MonitorSetup and restarts the bars for the new layout. Mode and
+# position changes (MonitorSetup's own xrandr calls) leave the set alone, so
+# they never loop.
+#
+# Started from bspwmrc; one instance per session (flock), so a reload does
+# not add another.
+
+lock="${XDG_RUNTIME_DIR:-/tmp}/bspwm-monitorwatch.lock"
+exec 9>"$lock"
+flock -n 9 || exit 0
+
+connected() {
+    xrandr --query 2>/dev/null | awk '$2 == "connected" { print $1 }' | sort | tr '\n' ' '
+}
+
+last=$(connected 9>&-)
+
+xev -root -event randr 9>&- 2>/dev/null | while IFS= read -r line; do
+    case $line in
+        RR*) ;;
+        *) continue ;;
+    esac
+    # One plug produces several events: wait until they stop for 1.5 s.
+    while IFS= read -r -t 1.5 _; do :; done
+    now=$(connected 9>&-)
+    [ "$now" = "$last" ] && continue
+    last=$now
+    bspc wm -r 9>&-
+done

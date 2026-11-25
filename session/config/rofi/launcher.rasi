@@ -1,0 +1,207 @@
+// Misa · style 4 — "drop": the launcher drops out of the top bar, under the
+// search icon at the left edge, instead of floating in the middle.
+// anchor: bar-left
+//   (RofiLauncher reads the line above: it opens this style on the monitor
+//    of the click/focus and sets y-offset to that monitor's bar height + gap,
+//    so it sits right under any bar.)
+//
+// A command bar (the Raycast / Spotlight pattern people know): a big search
+// line with a live result count in the mono branding font, then one row per
+// app: icon, name, and what it is ("Web Browser") dimmed. Key hints as
+// keycaps at the bottom, like the pickers. Most-used apps first (history on).
+// Rows share the bar panels' language: the selection is a soft surface.
+// Colours/font: shared.rasi.
+
+configuration {
+    modi:                       "drun";
+    show-icons:                 true;
+    drun-display-format:        "{name}[  <span alpha='45%'>{generic}</span>]";
+    disable-history:            false;
+    sidebar-mode:               false;
+    hover-select:               false;
+    me-select-entry:            "";
+    me-accept-entry:            "MousePrimary";
+    click-to-exit:              true;
+}
+
+@import "shared.rasi"
+
+window {
+    // "real" only so the rounded corners show the desktop; the panel itself
+    // is fully opaque (@background).
+    transparency:               "real";
+    location:                   northwest;
+    anchor:                     northwest;
+    x-offset:                   8px;
+    y-offset:                   52px;
+    width:                      560px;
+    enabled:                    true;
+    border:                     1px;
+    border-color:               @border-soft;
+    border-radius:              14px;
+    cursor:                     "default";
+    background-color:           @background;
+}
+
+mainbox {
+    enabled:                    true;
+    spacing:                    10px;
+    padding:                    14px;
+    background-color:           transparent;
+    orientation:                vertical;
+    children:                   [ "inputbar", "listview", "footer" ];
+}
+
+// The search line: no box, big type over a hairline, the count at the end.
+inputbar {
+    enabled:                    true;
+    spacing:                    12px;
+    padding:                    4px 6px 14px 6px;
+    border:                     0px 0px 1px 0px;
+    border-color:               @border-soft;
+    background-color:           transparent;
+    text-color:                 @foreground;
+    orientation:                horizontal;
+    children:                   [ "textbox-search", "entry", "num-filtered-rows", "textbox-num-sep", "num-rows" ];
+}
+
+textbox-search {
+    expand:                     false;
+    font:                       "Material Design Icons Desktop 18";
+    str:                        "󰍉";
+    background-color:           transparent;
+    text-color:                 @foreground-muted;
+    vertical-align:             0.5;
+}
+
+entry {
+    enabled:                    true;
+    expand:                     true;
+    font:                       "Inter Medium 15";
+    background-color:           transparent;
+    text-color:                 @foreground;
+    cursor:                     text;
+    vertical-align:             0.5;
+    placeholder:                "Search apps";
+    placeholder-color:          @foreground-muted;
+}
+
+num-filtered-rows, textbox-num-sep, num-rows {
+    expand:                     false;
+    font:                       "JetBrainsMono Nerd Font 9";
+    background-color:           transparent;
+    text-color:                 @foreground-muted;
+    vertical-align:             0.5;
+}
+
+textbox-num-sep {
+    str:                        "/";
+}
+
+listview {
+    enabled:                    true;
+    columns:                    1;
+    lines:                      7;
+    cycle:                      false;
+    dynamic:                    true;
+    fixed-height:               true;
+    scrollbar:                  false;
+    layout:                     vertical;
+    spacing:                    2px;
+    background-color:           transparent;
+    text-color:                 @foreground;
+    cursor:                     "default";
+}
+
+element {
+    enabled:                    true;
+    spacing:                    14px;
+    padding:                    9px 10px;
+    border-radius:              10px;
+    background-color:           transparent;
+    text-color:                 @foreground;
+    cursor:                     pointer;
+    orientation:                horizontal;
+}
+
+element normal.normal,
+element alternate.normal,
+element normal.active,
+element alternate.active,
+element normal.urgent,
+element alternate.urgent {
+    background-color:           transparent;
+    text-color:                 @foreground;
+}
+
+element selected.normal,
+element selected.active,
+element selected.urgent {
+    background-color:           @selected-soft;
+    text-color:                 @foreground;
+}
+
+element-icon {
+    background-color:           transparent;
+    text-color:                 inherit;
+    size:                       28px;
+    cursor:                     inherit;
+}
+
+element-text {
+    font:                       "Inter Medium 11";
+    markup:                     true;
+    highlight:                  bold;
+    background-color:           transparent;
+    text-color:                 inherit;
+    cursor:                     inherit;
+    vertical-align:             0.5;
+    horizontal-align:           0.0;
+}
+
+// Key hints as keycaps, like the card pickers (bin/CardPicker).
+footer {
+    orientation:                horizontal;
+    expand:                     false;
+    spacing:                    8px;
+    padding:                    10px 4px 0px 4px;
+    border:                     1px 0px 0px 0px;
+    border-color:               @border-soft;
+    background-color:           transparent;
+    children:                   [ "textbox-k1", "textbox-l1", "textbox-k2", "textbox-l2", "textbox-k3", "textbox-l3" ];
+}
+
+textbox-k1, textbox-k2, textbox-k3 {
+    font:                       @font-key;
+    expand:                     false;
+    padding:                    2px 6px;
+    border:                     1px;
+    border-radius:              5px;
+    border-color:               @foreground-muted;
+    background-color:           transparent;
+    text-color:                 @foreground;
+    vertical-align:             0.5;
+}
+
+textbox-l1, textbox-l2, textbox-l3 {
+    font:                       @font-key;
+    expand:                     false;
+    margin:                     0px 12px 0px 0px;
+    background-color:           transparent;
+    text-color:                 @foreground-muted;
+    vertical-align:             0.5;
+}
+
+textbox-k1 { str: "ENTER"; }
+textbox-l1 { str: "OPEN"; }
+textbox-k2 { str: "↑ ↓"; }
+textbox-l2 { str: "MOVE"; }
+textbox-k3 { str: "ESC"; }
+textbox-l3 { str: "CLOSE"; }
+
+error-message {
+    padding:                    12px;
+    border-radius:              10px;
+    background-color:           @background;
+    text-color:                 @foreground;
+}

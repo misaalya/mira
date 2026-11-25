@@ -1,0 +1,24 @@
+#!/bin/sh
+# Notification history count for the Mira topbar; bell-off in the theme's grey
+# while Do Not Disturb is active. Invoked on demand by polybar's IPC hook
+# (pushed by NotifPanel) — zero polling.
+MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
+GREY="#7a7a7a"
+if [ -r "$MIRA_DIR/bars/colors.ini" ]; then
+    while IFS='= ' read -r key value; do
+        [ "$key" = grey ] && { GREY=$value; break; }
+    done < "$MIRA_DIR/bars/colors.ini"
+fi
+
+STATE="${XDG_RUNTIME_DIR:-/tmp}/notif-panel.state"
+count=0
+dnd=0
+if [ -r "$STATE" ]; then
+    read -r count dnd < "$STATE" 2>/dev/null || true
+fi
+
+if [ "$dnd" = "1" ]; then
+    printf '%%{F%s}%%{T2}\363\260\252\221%%{T-}%%{F-}\n' "$GREY"
+else
+    printf '%%{T2}\363\260\202\234%%{T-} %s\n' "${count:-0}"
+fi

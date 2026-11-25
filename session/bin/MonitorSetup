@@ -1,0 +1,74 @@
+#!/bin/sh
+# =============================================================
+# MonitorSetup — Single & dual-monitor layout setup for BSPWM.
+# Adapted from gh0stzk/dotfiles (GPL-3.0).
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-23 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+XRANDR_OUTPUT=$(xrandr --query 2>/dev/null) || exit 0
+
+echo "$XRANDR_OUTPUT" | while read -r mon state _; do
+    [ "$state" = "disconnected" ] && xrandr --output "$mon" --off 2>/dev/null || true
+done
+
+get_monitor_mode() {
+    echo "$XRANDR_OUTPUT" | awk -v monitor="$1" '
+        $1 == monitor && $2 == "connected" { found = 1; next }
+        found && /^[^[:space:]]/ { exit }
+        found && /\*/ { print $1; done = 1; exit }
+        found && /^[[:space:]]+[0-9]+x[0-9]+/ && first == "" { first = $1 }
+        END { if (!done && first != "") print first }
+    '
+}
+
+# shellcheck disable=SC2046
+set -- $(echo "$XRANDR_OUTPUT" | awk '$2 == "connected" { print $1 }')
+[ "$#" -gt 0 ] || exit 0
+
+laptop=""
+for mon in "$@"; do
+    case "$mon" in
+        eDP*|LVDS*|DSI*|edp*) laptop="$mon"; break ;;
+    esac
+done
+
+if [ -n "$laptop" ]; then
+    external=""
+    for mon in "$@"; do
+        [ "$mon" = "$laptop" ] && continue
+        external="$mon"
+        break
+    done
+else
+    laptop="$1"
+    shift
+    external="${1:-}"
+fi
+
+laptop_mode=$(get_monitor_mode "$laptop")
+[ -n "$laptop_mode" ] || laptop_mode="1920x1080"
+
+if [ -n "$external" ]; then
+    external_mode=$(get_monitor_mode "$external")
+    [ -n "$external_mode" ] || external_mode="1920x1080"
+    ext_h=${external_mode#*x}
+    ext_h=${ext_h%%[!0-9]*}
+    [ -n "$ext_h" ] || ext_h=1080
+
+    xrandr --output "$external" --mode "$external_mode" --pos 0x0 --rotate normal \
+           --output "$laptop"   --mode "$laptop_mode"   --pos "0x${ext_h}" --rotate normal --primary 2>/dev/null || true
+
+    bspc monitor "$laptop"   -d 1 2 3 4
+    bspc monitor "$external" -d 5 6 7 8
+    bspc wm -O "$laptop" "$external"
+else
+    xrandr --output "$laptop" --mode "$laptop_mode" --pos 0x0 --rotate normal --primary 2>/dev/null || true
+    bspc monitor "$laptop" -d 1 2 3 4 5 6
+    bspc wm -O "$laptop"
+fi
+
+bspc desktop -f '^1' 2>/dev/null || true

@@ -1,0 +1,34 @@
+#!/bin/sh
+# Help — Rofi keybinding cheatsheet parsed directly from config/sxhkdrc.
+
+MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
+SXHKDRC="$MIRA_DIR/config/sxhkdrc"
+THEME="$MIRA_DIR/config/rofi/keybinds.rasi"
+SHARED="$MIRA_DIR/config/rofi/shared.rasi"
+HEADER_KEY="active"
+
+[ -r "$SXHKDRC" ] || { notify-send -a Help "Help" "sxhkdrc not found: $SXHKDRC"; exit 1; }
+BarPanel close-all >/dev/null 2>&1 || true
+
+ACCENT=$(sed -n "s/^[[:space:]]*${HEADER_KEY}[[:space:]]*:[[:space:]]*\(#[0-9a-fA-F]\{6\}\).*/\1/p" "$SHARED" 2>/dev/null | head -n 1)
+FONT=$(sed -n 's/^[[:space:]]*font[[:space:]]*:[[:space:]]*"\(.*\) [0-9][0-9.]*".*/\1/p' "$SHARED" 2>/dev/null | head -n 1)
+
+awk -v accent="${ACCENT:-#e6e6e6}" '
+    function xmlesc(s) {
+        gsub(/&/, "\\&amp;", s)
+        gsub(/</, "\\&lt;", s)
+        gsub(/>/, "\\&gt;", s)
+        return s
+    }
+    /^#[[:space:]]*--[[:space:]]+.+[[:space:]]+-- #[[:space:]]*$/ {
+        sub(/^#[[:space:]]*--[[:space:]]+/, "")
+        sub(/[[:space:]]+-- #[[:space:]]*$/, "")
+        printf "<span size=\"large\" weight=\"bold\" foreground=\"%s\">── %s ──</span>\n", accent, xmlesc($0)
+        last = ""
+        next
+    }
+    /^#/ { sub(/^#[[:space:]]*/, ""); last = $0; next }
+    /^[[:alpha:]]/ && last != "" { printf "<b>%-30s</b>  %s\n", xmlesc($0), xmlesc(last) }
+    { last = "" }
+' "$SXHKDRC" | rofi -dmenu -markup-rows -i -p "Keybindings" -theme "$THEME" \
+    -theme-str "* { font: \"${FONT:-Inter Medium} 10\"; }"

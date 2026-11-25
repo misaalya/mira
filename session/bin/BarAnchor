@@ -1,0 +1,72 @@
+#!/bin/sh
+# BarAnchor [--pointer]
+#
+# Where a panel opened from the bar should go. Prints
+#     <monitor-name> <edge> <offset>
+# monitor: the one under the pointer with --pointer (a click on a bar icon),
+#          otherwise bspwm's focused monitor (a keyboard shortcut).
+# edge:    top or bottom: the side where that monitor's bar is (the larger
+#          bspwm padding, which includes the bar's strut).
+# offset:  that padding, i.e. the bar's height. A panel placed offset + gap
+#          from the edge sits right against whichever bar the rice uses.
+#
+# BarAnchor --rofi <west|east|pointer:WIDTH> [--pointer]
+#     Two lines for rofi: the monitor name, and a -theme-str placing a panel
+#     against the bar (gap 6px) at the west/east end, or (pointer:WIDTH)
+#     centred under the pointer for a panel WIDTH px wide, kept 8px inside
+#     the monitor; used for clicks on a bar icon.
+#
+# Used by RofiLauncher, rofi-bluetooth, PowerMenu and BarPanel.
+
+rofi_side=
+if [ "${1:-}" = --rofi ]; then
+    rofi_side=${2:-east}
+    shift 2
+fi
+
+sel=focused
+[ "${1:-}" = --pointer ] && sel=pointed
+
+mon=$(bspc query -M -m "$sel" --names 2>/dev/null) ||
+    mon=$(bspc query -M -m focused --names 2>/dev/null)
+
+pad=$(bspc query -T -m "$mon" 2>/dev/null | grep -o '"padding":{[^}]*}' | head -n 1)
+top=${pad#*\"top\":};       top=${top%%,*}
+bottom=${pad#*\"bottom\":}; bottom=${bottom%%,*}
+case $top in ''|*[!0-9]*) top=0 ;; esac
+case $bottom in ''|*[!0-9]*) bottom=0 ;; esac
+
+if [ "$bottom" -gt "$top" ]; then
+    edge=bottom off=$bottom
+else
+    edge=top off=$top
+fi
+
+if [ -z "$rofi_side" ]; then
+    printf '%s %s %s\n' "$mon" "$edge" "$off"
+    exit 0
+fi
+
+case $rofi_side in
+    pointer:*)
+        w=${rofi_side#pointer:}
+        rect=$(bspc query -T -m "$mon" | grep -o '"rectangle":{[^}]*}' | head -n 1)
+        mx=${rect#*\"x\":}; mx=${mx%%,*}
+        mw=${rect#*\"width\":}; mw=${mw%%,*}
+        eval "$(xdotool getmouselocation --shell 2>/dev/null)"
+        x=$(( ${X:-0} - mx - w / 2 ))
+        [ "$x" -gt $((mw - w - 8)) ] && x=$((mw - w - 8))
+        [ "$x" -lt 8 ] && x=8
+        rofi_side=west
+        ;;
+    east) x=-8 ;;
+    *)    x=8 ;;
+esac
+if [ "$edge" = top ]; then
+    loc=north$rofi_side y=$((off + 6))
+else
+    loc=south$rofi_side y=$((-(off + 6)))
+fi
+printf '%s\n' "$mon"
+printf 'window { location: %s; anchor: %s; x-offset: %spx; y-offset: %spx; }\n' \
+    "$loc" "$loc" "$x" "$y"

@@ -1,0 +1,70 @@
+#!/bin/sh
+# =============================================================
+# ScreenLocker — Blurred screenshot / theme wallpaper screen locker (i3lock).
+# Adapted from gh0stzk/dotfiles (GPL-3.0) for Debian 13.
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-23 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
+RUN="${XDG_RUNTIME_DIR:-/tmp}"
+TEMP_IMAGE="$RUN/mira-i3lock.png"
+TEMP_LAYOUT="$RUN/mira-locker-keymap"
+
+save_current_keymap() {
+    setxkbmap -query | awk '/layout:/ {print $2}' > "$TEMP_LAYOUT"
+    setxkbmap -query | awk '/options:/ {print $2}' > "${TEMP_LAYOUT}_options"
+}
+
+restore_previous_keymap() {
+    if [ -f "$TEMP_LAYOUT" ]; then
+        previous_layout=$(cat "$TEMP_LAYOUT")
+        previous_options=$(cat "${TEMP_LAYOUT}_options" 2>/dev/null || true)
+        if [ -n "$previous_options" ]; then
+            setxkbmap -layout "$previous_layout" -option "$previous_options"
+        elif [ -n "$previous_layout" ]; then
+            setxkbmap -layout "$previous_layout"
+        fi
+        rm -f "$TEMP_LAYOUT" "${TEMP_LAYOUT}_options"
+    fi
+}
+
+lock_with_image() {
+    if ! command -v i3lock >/dev/null 2>&1; then
+        notify-send -a ScreenLocker -u critical "ScreenLocker" "i3lock is not installed" 2>/dev/null
+        return 1
+    fi
+    save_current_keymap
+    setxkbmap -layout us
+    i3lock -n -e -i "$TEMP_IMAGE"
+    restore_previous_keymap
+    rm -f "$TEMP_IMAGE"
+}
+
+default_lockscreen() {
+    maim -d 0.3 -u "$TEMP_IMAGE" || return 1
+    magick "$TEMP_IMAGE" -blur 5x4 "$TEMP_IMAGE"
+    lock_with_image
+}
+
+theme_lockscreen() {
+    theme="mira"
+    [ -r "$MIRA_DIR/.theme" ] && read -r theme < "$MIRA_DIR/.theme"
+    lock_image=$(find "$MIRA_DIR/themes/$theme/walls" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) 2>/dev/null | shuf -n 1)
+    [ -n "$lock_image" ] || return 1
+    magick "$lock_image" "$TEMP_IMAGE" || return 1
+    lock_with_image
+}
+
+case "${1:-}" in
+    -r|--rice|--theme) theme_lockscreen ;;
+    -h|--help)
+        printf '%s\n' "ScreenLocker [options]" \
+            "  (default)       lock with a blurred screenshot" \
+            "  -r, --theme     lock with a random wallpaper from the active theme"
+        ;;
+    *) default_lockscreen ;;
+esac

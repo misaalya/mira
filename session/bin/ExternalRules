@@ -1,0 +1,53 @@
+#!/bin/sh
+# =============================================================
+# ExternalRules — BSPWM window rules for Mira.
+# Adapted from gh0stzk/dotfiles (GPL-3.0).
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-23 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+wid=$1
+class=$2
+instance=$3
+consequences=$4
+
+result() {
+    eval "$consequences"
+    [ "${state:-}" ] || echo "$1"
+}
+
+case "$class" in
+    FloaTerm)
+        result "state=floating center=on rectangle=696x399+0+0"
+        ;;
+    Updating)
+        result "state=floating sticky=on center=on rectangle=460x420+0+0"
+        ;;
+    mpv)
+        result "state=floating focus=on center=on rectangle=723x407+0+0"
+        ;;
+    pavucontrol)
+        result "state=floating center=on"
+        ;;
+    dev.misa.yazi)
+        result "state=floating center=on rectangle=1150x760+0+0"
+        ;;
+esac
+
+case "$instance" in
+    FloaTerm)
+        result "state=floating center=on rectangle=696x399+0+0"
+        ;;
+    Updating)
+        result "state=floating sticky=on center=on rectangle=460x420+0+0"
+        ;;
+    YaziTerm)
+        result "state=floating center=on rectangle=960x540+0+0"
+        ;;
+    Toolkit)
+        result "state=floating sticky=on rectangle=500x290+1054+593"
+        ;;
+esac

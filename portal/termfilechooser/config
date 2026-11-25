@@ -1,0 +1,44 @@
+# Mira — xdg-desktop-portal-termfilechooser
+# File chooser lewat terminal (yazi) menggantikan dialog GTK.
+# Di-deploy oleh tools/deploy.sh; sumber kebenaran ada di repo Mira.
+#
+# Lokasi yang dibaca (urut):
+#   $XDG_CONFIG_HOME/xdg-desktop-portal-termfilechooser/$XDG_CURRENT_DESKTOP
+#   $XDG_CONFIG_HOME/xdg-desktop-portal-termfilechooser/config
+
+[filechooser]
+# Wrapper sendiri (yazi-wrapper.sh, di folder config ini — portal mencari di
+# sini lebih dulu daripada /usr/share/xdg-desktop-portal-termfilechooser/).
+# Tugasnya: memanggil yazi dengan --chooser-file agar hasil pilihan ditulis ke
+# file lalu dibaca portal, plus membuat file tujuan KOSONG saat menyimpan.
+cmd=yazi-wrapper.sh
+
+# JANGAN biarkan portal menulis teks instruksi ke file tujuan: kalau dialog
+# simpan dibatalkan SETELAH file di-rename, teks itu tertinggal di folder
+# tujuan dan terlihat seperti hasil simpan (gambar jadi berisi teks). Dengan 0,
+# wrapper kita yang menyiapkan file kosong dan membersihkannya saat batal.
+create_help_file=0
+
+# Direktori awal untuk dialog SIMPAN (lihat save_mode di bawah). Dipakai juga
+# kalau aplikasi tak menyarankan path apa pun.
+default_dir=$HOME/Downloads
+
+# Terminal untuk menjalankan yazi.
+#   --class=dev.misa.yazi          -> app-id khusus (Wayland), dipakai window rule
+#                                    Hyprland untuk float + center jendela ini.
+#                                    Dipakai juga oleh "Show in folder"
+#                                    (org.freedesktop.FileManager1.common).
+#   --gtk-single-instance=false    -> wajib: proses ghostty terpisah, supaya
+#                                    app-id khusus tadi benar-benar dipakai.
+#   -e                             -> jalankan perintah di dalamnya.
+env=TERMCMD=ghostty --class=dev.misa.yazi --gtk-single-instance=false --window-decoration=none -e
+
+# open_mode/save_mode: suggested | default | last  (dari mana path awal diambil)
+#   suggested = path dari aplikasi · default = default_dir · last = folder terakhir
+open_mode=suggested
+# Dialog SIMPAN mengikuti folder yang diingat aplikasinya (Chromium mengingat
+# folder "Save as" terakhir dan mengirimnya sebagai suggested path). Jangan
+# dipatok ke `default`: itu membuat unduhan selalu mendarat di satu folder dan
+# mengabaikan ingatan browser. `default_dir` di atas hanya dipakai kalau
+# aplikasi tak menyarankan apa pun.
+save_mode=suggested

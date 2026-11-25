@@ -1,0 +1,12 @@
+[SddmGreeterTheme]
+Name=Mira
+Description=Pixel-dithered underwater login screen matching the Mira website
+Author=Misaalya
+License=GPL-3.0-only
+Type=sddm-theme
+Version=2.0
+MainScript=Main.qml
+ConfigFile=theme.conf
+Theme-Id=mira
+Theme-API=2.0
+QtVersion=6

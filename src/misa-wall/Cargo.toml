@@ -1,0 +1,18 @@
+[package]
+name = "misa-wall"
+version = "0.1.0"
+edition = "2021"
+description = "Hyper-optimized X11 wallpaper engine with Mira's original Luma-Halftone Develop transition"
+authors = ["Misaalya"]
+license = "GPL-3.0-only"
+
+# No crates: libX11, libXext (MIT-SHM), libXrandr, and libgdk_pixbuf-2.0 are
+# called directly via FFI, with explicit x86_64 AVX2/SSE2 SIMD.
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,64 @@
+#!/bin/sh
+# =============================================================
+# MediaControl — MPRIS (playerctl) front-end for Mira bar & eww.
+# Adapted from gh0stzk/dotfiles (GPL-3.0).
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-23 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+RUN="${XDG_RUNTIME_DIR:-/tmp}"
+Cover="$RUN/mira-cover.png"
+LAST_SONG_FILE="$RUN/mira-last-song.txt"
+
+case "${1:-}" in
+    --next)     playerctl next ;;
+    --previous) playerctl previous ;;
+    --toggle)   playerctl play-pause ;;
+    --stop)     playerctl stop ;;
+    --state)
+        out=$(playerctl metadata --format '{{playerName}}	{{status}}	{{title}}	{{artist}}	{{duration(position)}}	{{position}}	{{duration(mpris:length)}}	{{mpris:length}}	{{shuffle}}	{{loop}}' 2>/dev/null |
+            jq -Rc 'split("\t") as $f | {
+                player: $f[0], status: $f[1], title: $f[2], artist: $f[3],
+                pos: $f[4], posn: ((($f[5] | tonumber?) // 0) / 1000000 | floor),
+                len: $f[6], lenn: ((($f[7] | tonumber?) // 0) / 1000000 | floor),
+                shuffle: ($f[8] == "true" or $f[8] == "On"), loop: $f[9] }' 2>/dev/null)
+        [ -n "$out" ] || out='{"player":"","status":"Stopped","title":"","artist":"","pos":"0:00","posn":0,"len":"0:00","lenn":0,"shuffle":false,"loop":"None"}'
+        printf '%s\n' "$out"
+        ;;
+    --title)
+        title=$(playerctl metadata --format "{{title}}" 2>/dev/null)
+        printf '%s\n' "${title:-Nothing playing}"
+        ;;
+    --artist)
+        artist=$(playerctl metadata --format "{{artist}}" 2>/dev/null)
+        printf '%s\n' "${artist:-}"
+        ;;
+    --status)
+        status=$(playerctl status 2>/dev/null)
+        printf '%s\n' "${status:-Stopped}"
+        ;;
+    --cover)
+        current_song="$(playerctl metadata --format '{{title}}-{{artist}}' 2>/dev/null)"
+        last_song=""
+        [ -f "$LAST_SONG_FILE" ] && last_song=$(cat "$LAST_SONG_FILE")
+        if [ "$current_song" != "$last_song" ] || [ ! -f "$Cover" ]; then
+            art_url="$(playerctl metadata mpris:artUrl 2>/dev/null)"
+            case "$art_url" in
+                file://*)
+                    cp -f "${art_url#file://}" "$Cover" 2>/dev/null || rm -f "$Cover"
+                    ;;
+                http://*|https://*)
+                    curl -fsSL "$art_url" -o "$Cover" 2>/dev/null || rm -f "$Cover"
+                    ;;
+                *)
+                    rm -f "$Cover"
+                    ;;
+            esac
+            printf '%s\n' "$current_song" > "$LAST_SONG_FILE"
+        fi
+        [ -f "$Cover" ] && printf '%s\n' "$Cover" || printf '\n'
+        ;;
+esac 2>/dev/null

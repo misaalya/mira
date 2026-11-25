@@ -1,0 +1,68 @@
+# Build artifacts & caches
+/build/
+/target/
+**/target/
+*.o
+*.so
+*.a
+
+# Compiled binaries inside session/bin
+/session/bin/Scroll
+/session/bin/misa-clip
+/session/bin/misa-backdrop
+/session/bin/misa-wall
+/session/bin/x-shot
+/session/bin/ClipPanel
+/session/bin/WifiPanel
+/session/bin/BluetoothPanel
+/session/bin/NotifPanel
+/session/bin/WindowSwitch
+/session/bin/MediaPillUI
+/session/bin/CardPicker
+/session/bin/WaitCompositor
+
+# Runtime, user state & sensitive local data (NEVER commit)
+.env
+.env.*
+*.pid
+*.bdpid
+*.fifo
+*.sock
+*.lock
+*.log
+*.state
+*.bak
+*.tmp
+/dev-sandbox/
+/scratch/
+system.ini
+.sys
+xsettingsd.conf
+shared.rasi
+colors.ini
+colors.scss
+*.png
+*.jpg
+*.jpeg
+*.webp
+!/session/walls/*
+# Shipped images: README screenshots, bar previews, and procedural theme wallpapers.
+!/assets/screenshots/*.webp
+!/assets/screenshots/**/*.webp
+!/session/bars/*/preview-bar.webp
+!/session/themes/mira/walls/*.webp
+!/session/themes/aria/walls/*.webp
+!/session/themes/ember/walls/*.webp
+!/session/themes/matcha/walls/*.webp
+!/session/themes/fjord/walls/*.webp
+!/sddm/mira/assets/*.jpg
+!/sddm/mira/assets/*.png
+!/docs/assets/**/*.webp
+!/docs/assets/**/*.png
+
+# Logo drafts from another tool, kept locally (the logo in use is assets/logo/)
+/assets/mira-pixel-*
+
+# Python bytecode
+__pycache__/
+*.py[cod]

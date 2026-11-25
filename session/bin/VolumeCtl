@@ -1,0 +1,49 @@
+#!/bin/sh
+# VolumeCtl — the volume panel of the top bar (eww window "volume") and the
+# pactl calls behind it.
+#
+#   VolumeCtl popup [--pointer]  toggle the panel under the bar, right side,
+#                                on the monitor of the click or the focused one
+#   VolumeCtl close              close it
+#   VolumeCtl state              JSON for the panel: vol, mute, mic, micmute
+#   VolumeCtl device             description of the default output
+#   VolumeCtl set N | mic N      set output / input volume (unmutes)
+#   VolumeCtl mute | micmute     toggle mute
+#
+# Placement, one-panel-at-a-time and auto-close: bin/BarPanel.
+# Cost: nothing while closed (eww only polls for open windows); while open,
+# `state` runs every second (four pactl queries, ~20ms).
+
+pct() { pactl "$1" "$2" 2>/dev/null | grep -o '[0-9]*%' | head -n 1 | tr -d %; }
+yes_no() { pactl "$1" "$2" 2>/dev/null | grep -q 'yes' && echo true || echo false; }
+
+case "${1:-}" in
+    state)
+        printf '{"vol":%s,"mute":%s,"mic":%s,"micmute":%s}\n' \
+            "$(pct get-sink-volume @DEFAULT_SINK@)" \
+            "$(yes_no get-sink-mute @DEFAULT_SINK@)" \
+            "$(pct get-source-volume @DEFAULT_SOURCE@)" \
+            "$(yes_no get-source-mute @DEFAULT_SOURCE@)"
+        ;;
+    device)
+        sink=$(pactl get-default-sink 2>/dev/null)
+        pactl -f json list sinks 2>/dev/null |
+            jq -r --arg n "$sink" '.[] | select(.name == $n) | .description' 2>/dev/null
+        ;;
+    set)
+        pactl set-sink-mute @DEFAULT_SINK@ 0
+        pactl set-sink-volume @DEFAULT_SINK@ "${2:-0}%"
+        ;;
+    mic)
+        pactl set-source-mute @DEFAULT_SOURCE@ 0
+        pactl set-source-volume @DEFAULT_SOURCE@ "${2:-0}%"
+        ;;
+    mute)    pactl set-sink-mute @DEFAULT_SINK@ toggle ;;
+    micmute) pactl set-source-mute @DEFAULT_SOURCE@ toggle ;;
+    close)   BarPanel close-all ;;
+    popup)   BarPanel toggle volume ${2:+"$2"} ;;
+    *)
+        sed -n '2,14p' "$0"
+        exit 1
+        ;;
+esac

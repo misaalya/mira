@@ -1,0 +1,67 @@
+#!/bin/sh
+# =============================================================
+# PicomWatch — keep picom running on this X display.
+# Without a compositor the transparent bars (mira-islands) render
+# as a solid black strip and the scroll/window animations stop.
+# Each exit is logged with its status to
+# ${XDG_CACHE_HOME:-~/.cache}/mira/picom.log, together with
+# picom's own warnings, so a crash can be traced afterwards.
+# Stops when the X server goes away, or after 5 quick failures.
+# Usage: PicomWatch [picom args...]
+# =============================================================
+
+DISPLAY=${DISPLAY:-:0}
+export DISPLAY
+LOCKFILE="${XDG_RUNTIME_DIR:-/tmp}/mira-picomwatch-${DISPLAY#:}.lock"
+LOG="${XDG_CACHE_HOME:-$HOME/.cache}/mira/picom.log"
+mkdir -p "${LOG%/*}"
+
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCKFILE"
+    flock -n 9 || exit 0
+fi
+
+# picom already running here (started by hand): just watch until it stops.
+display_picom() {
+    for p in $(pgrep -x picom 2>/dev/null); do
+        d=$(tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null | sed -n 's/^DISPLAY=//p' | head -n 1)
+        [ "$d" = "$DISPLAY" ] && { echo "$p"; return 0; }
+    done
+    return 1
+}
+
+stamp() { date '+%F %T'; }
+
+# Keep the log from growing without bound.
+[ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 262144 ] && tail -n 200 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+
+quick=0
+while :; do
+    if p=$(display_picom); then
+        while kill -0 "$p" 2>/dev/null; do sleep 2; done
+        printf '%s picom %s (not started by PicomWatch) stopped\n' "$(stamp)" "$p" >>"$LOG"
+    else
+        start=$(date +%s)
+        picom "$@" --log-level=warn --log-file "$LOG" >>"$LOG" 2>&1
+        rc=$?
+        if [ "$rc" -gt 128 ]; then
+            why="killed by signal $((rc - 128))"
+        else
+            why="exit status $rc"
+        fi
+        printf '%s picom stopped (%s)\n' "$(stamp)" "$why" >>"$LOG"
+        if [ $(($(date +%s) - start)) -lt 10 ]; then
+            quick=$((quick + 1))
+        else
+            quick=0
+        fi
+        if [ "$quick" -ge 5 ]; then
+            printf '%s picom keeps failing, PicomWatch gives up\n' "$(stamp)" >>"$LOG"
+            exit 1
+        fi
+    fi
+    # X server gone (logout): stop quietly.
+    xprop -root -len 0 _NET_SUPPORTING_WM_CHECK >/dev/null 2>&1 || exit 0
+    sleep 1
+    printf '%s restarting picom\n' "$(stamp)" >>"$LOG"
+done

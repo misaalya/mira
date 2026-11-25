@@ -1,0 +1,198 @@
+#!/bin/sh
+# =============================================================
+# BarWatch — keep one polybar alive on every connected monitor.
+# Display-scoped so isolated Xephyr sessions never interfere.
+# =============================================================
+
+MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
+export MIRA_CONFIG_DIR="$MIRA_DIR"
+LOCK="${XDG_RUNTIME_DIR:-/tmp}/mira-theme.lock.d"
+PIDFILE="${XDG_RUNTIME_DIR:-/tmp}/mira-barwatch.pid"
+LOCKFILE="${XDG_RUNTIME_DIR:-/tmp}/mira-barwatch.lock"
+LOG="${XDG_RUNTIME_DIR:-/tmp}/mira-barwatch.log"
+DISPLAY=${DISPLAY:-:0}
+export DISPLAY
+
+GRACE=5
+
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCKFILE"
+    flock -w 3 9 || exit 0
+elif [ -e "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+    exit 0
+fi
+printf '%s\n' "$$" >"$PIDFILE"
+trap 'rm -f "$PIDFILE"' EXIT
+
+current_bar() {
+    theme="mira"
+    [ -r "$MIRA_DIR/.theme" ] && read -r theme <"$MIRA_DIR/.theme"
+    sed -n 's/^main_bar="\(.*\)".*/\1/p' "$MIRA_DIR/themes/$theme/theme.conf" 2>/dev/null
+}
+
+expected_monitors() {
+    bar=$1
+    [ -f "$MIRA_DIR/bars/$bar/Bar.bash" ] || return 1
+    grep -q 'polybar' "$MIRA_DIR/bars/$bar/Bar.bash" 2>/dev/null || return 1
+    polybar --list-monitors 2>/dev/null | cut -d: -f1
+}
+
+bar_table() {
+    for p in $1; do
+        penv=$(tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null)
+        d=$(printf '%s\n' "$penv" | sed -n 's/^DISPLAY=//p' | head -n 1)
+        [ "$d" = "$DISPLAY" ] || continue
+        m=$(printf '%s\n' "$penv" | sed -n 's/^MONITOR=//p' | head -n 1)
+        a=$(ps -o etimes= -p "$p" 2>/dev/null | tr -d ' ')
+        printf '%s %s %s\n' "$p" "${m:-?}" "${a:-0}"
+    done
+}
+
+kill_pids() {
+    for p in "$@"; do
+        kill "$p" 2>/dev/null || true
+    done
+    i=0
+    while :; do
+        alive=""
+        for p in "$@"; do
+            kill -0 "$p" 2>/dev/null && alive=1
+        done
+        [ -n "$alive" ] || return 0
+        i=$((i + 1))
+        [ "$i" -lt 10 ] || break
+        sleep 0.1
+    done
+    for p in "$@"; do
+        kill -KILL "$p" 2>/dev/null || true
+    done
+}
+
+monitor_sig() {
+    msig=""
+    for f in /sys/class/drm/card*-*/status; do
+        [ -r "$f" ] || continue
+        st=""
+        read -r st <"$f" || true
+        msig="$msig${f#/sys/class/drm/}=$st;"
+    done
+}
+
+misses=0
+dup_sig=""
+dup_misses=0
+SCAN=5
+REFRESH=15
+theme_seen=""
+bar=""
+want=""
+msig_seen=""
+last_pids=""
+healthy=0
+loops=0
+
+while :; do
+    sleep 2 9>&-
+
+    if [ -d "$LOCK" ] && kill -0 "$(cat "$LOCK/pid" 2>/dev/null)" 2>/dev/null; then
+        misses=0; dup_sig=""; dup_misses=0; healthy=0
+        continue
+    fi
+
+    loops=$((loops + 1))
+    theme="mira"
+    [ -r "$MIRA_DIR/.theme" ] && read -r theme <"$MIRA_DIR/.theme" || true
+    monitor_sig
+    if [ "$theme" != "$theme_seen" ] || [ "$msig" != "$msig_seen" ] || [ "$loops" -ge "$REFRESH" ]; then
+        theme_seen=$theme
+        msig_seen=$msig
+        loops=0
+        healthy=0
+        bar=$(current_bar) || bar=""
+        want=""
+        [ -n "$bar" ] && want=$(expected_monitors "$bar")
+    fi
+    [ -n "$bar" ] && [ -n "$want" ] || { misses=0; dup_sig=""; dup_misses=0; continue; }
+
+    if [ "$healthy" = 1 ] && [ $((loops % SCAN)) -ne 0 ]; then
+        alive=1
+        for p in $last_pids; do
+            kill -0 "$p" 2>/dev/null || { alive=0; break; }
+        done
+        [ "$alive" = 1 ] && continue
+    fi
+    pids=$(pgrep -x polybar 2>/dev/null)
+    if [ "$healthy" = 1 ] && [ "$pids" = "$last_pids" ]; then
+        continue
+    fi
+    last_pids=$pids
+    healthy=0
+
+    table=$(bar_table "$pids")
+
+    dups=""
+    if [ -n "$table" ]; then
+        dups=$(printf '%s\n' "$table" |
+            sort -k2,2 -k3,3n |
+            awk '{ if (seen[$2]++) { print $1 } }')
+    fi
+
+    if [ -n "$dups" ]; then
+        if [ "$dups" = "$dup_sig" ]; then
+            dup_misses=$((dup_misses + 1))
+        else
+            dup_sig=$dups
+            dup_misses=1
+        fi
+        if [ "$dup_misses" -ge 2 ]; then
+            printf '%s bar %s: duplicate bars, killing %s\n' \
+                "$(date '+%F %T')" "$bar" "$(printf '%s' "$dups" | tr '\n' ' ')" >>"$LOG"
+            # shellcheck disable=SC2086
+            kill_pids $dups
+            dup_sig=""; dup_misses=0; misses=0
+            continue
+        fi
+    else
+        dup_sig=""; dup_misses=0
+    fi
+
+    young=""
+    if [ -n "$table" ]; then
+        young=$(printf '%s\n' "$table" | awk -v g="$GRACE" '$3 < g { print 1; exit }')
+    fi
+
+    missing=$(printf '%s\n' "$table" |
+        awk -v want="$(printf '%s' "$want" | tr '\n' ' ')" '
+            NF >= 2 { seen[$2] = 1 }
+            END {
+                n = split(want, w, " ")
+                out = ""; sep = ""
+                for (i = 1; i <= n; i++)
+                    if (w[i] != "" && !(w[i] in seen)) {
+                        out = out sep w[i]; sep = ", "
+                    }
+                if (out != "") print out
+            }')
+
+    if [ -z "$missing" ] || [ -n "$young" ]; then
+        misses=0
+        [ -z "$missing" ] && [ -z "$young" ] && healthy=1
+        continue
+    fi
+
+    misses=$((misses + 1))
+    [ "$misses" -ge 2 ] || continue
+
+    bar=$(current_bar) || bar=""
+    [ -n "$bar" ] && [ -f "$MIRA_DIR/bars/$bar/Bar.bash" ] || { misses=0; continue; }
+    printf '%s bar %s: no bar on %s, restarting\n' "$(date '+%F %T')" "$bar" "$missing" >>"$LOG"
+    "$MIRA_DIR/bin/StopBars" >/dev/null 2>&1
+    (
+        main_bar=$bar
+        export main_bar
+        # shellcheck disable=SC1090
+        . "$MIRA_DIR/bars/$bar/Bar.bash"
+    ) </dev/null >/dev/null 2>&1 9>&- &
+
+    misses=0
+done

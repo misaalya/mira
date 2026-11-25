@@ -1,0 +1,101 @@
+#!/bin/sh
+# AppList — the launcher's application list (see RofiLauncher).
+#
+# Reads the desktop entries the way a menu does (XDG_DATA_HOME first, then
+# XDG_DATA_DIRS; the first file with a given id wins; Hidden / NoDisplay /
+# OnlyShowIn / NotShowIn honoured; localized Name / GenericName) and prints
+# one line per app, most launched first, then by name:
+#
+#     ID <TAB> PATH <TAB> ROW
+#
+# ROW is a rofi -dmenu row with \001 standing in for the NUL that starts
+# its options (icon, plus meta = keywords, categories, exec for matching).
+# Launch counts: rofi drun's history file, kept up by RofiLauncher.
+
+data_home=${XDG_DATA_HOME:-$HOME/.local/share}
+data_dirs=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
+# Same file and format ("COUNT ID") as rofi drun's own history.
+hist="${XDG_CACHE_HOME:-$HOME/.cache}/rofi3.druncache"
+
+bases=
+files=$(
+    IFS=:
+    for d in $data_home $data_dirs; do
+        [ -d "$d/applications" ] || continue
+        find -L "$d/applications" -name '*.desktop' -type f 2>/dev/null | sort
+    done
+)
+for d in $(IFS=:; printf '%s\n' $data_home $data_dirs); do
+    [ -d "$d/applications" ] && bases="$bases${bases:+:}$d/applications/"
+done
+[ -n "$files" ] || exit 0
+
+lang=${LC_ALL:-${LC_MESSAGES:-${LANG:-C}}}
+lang=${lang%%.*}
+lang=${lang%%@*}
+
+printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 awk \
+    -v bases="$bases" -v lfull="$lang" -v lshort="${lang%%_*}" \
+    -v desktops="${XDG_CURRENT_DESKTOP:-}" -v hist="$hist" '
+function esc(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); return s }
+function inlist(list, set,   n, a, i) {
+    n = split(list, a, ";")
+    for (i = 1; i <= n; i++) if (a[i] != "" && (a[i] in set)) return 1
+    return 0
+}
+function flush(   name, gen, row, meta) {
+    if (cur == "" || type != "Application" || nodisplay == "true" || hidden == "true") return
+    if (only != "" && !inlist(only, de)) return
+    if (notin != "" && inlist(notin, de)) return
+    name = lname2 != "" ? lname2 : (lname1 != "" ? lname1 : nm)
+    gen  = lgen2  != "" ? lgen2  : (lgen1  != "" ? lgen1  : gn)
+    if (name == "") return
+    row = esc(name)
+    if (gen != "" && gen != name) row = row "  <span alpha=\x2745%\x27>" esc(gen) "</span>"
+    meta = kw " " cats " " ex
+    gsub(/;/, " ", meta); gsub(/[\t\001\037]/, " ", meta)
+    row = row "\001" (icon != "" ? "icon\037" icon "\037" : "") "meta\037" meta
+    printf "%d\t%s\t%s\t%s\t%s\n", (cur in count ? count[cur] : 0), tolower(name), cur, path, row
+}
+function reset() {
+    type = nm = gn = icon = nodisplay = hidden = only = notin = kw = cats = ex = ""
+    lname1 = lname2 = lgen1 = lgen2 = ""; insec = 0
+}
+BEGIN {
+    nb = split(bases, base, ":")
+    nd = split(desktops, d, ":"); for (i = 1; i <= nd; i++) de[d[i]] = 1
+    while ((getline line < hist) > 0) { split(line, h, " "); count[h[2]] = h[1] + 0 }
+    close(hist)
+}
+FNR == 1 {
+    flush(); reset(); cur = ""
+    for (i = 1; i <= nb; i++) if (index(FILENAME, base[i]) == 1) {
+        id = substr(FILENAME, length(base[i]) + 1); gsub(/\//, "-", id); break
+    }
+    if (id in seen) { nextfile }
+    seen[id] = 1; cur = id; path = FILENAME
+}
+/^\[/ { insec = ($0 == "[Desktop Entry]"); next }
+!insec || /^#/ { next }
+{
+    eq = index($0, "="); if (!eq) next
+    k = substr($0, 1, eq - 1); v = substr($0, eq + 1)
+    sub(/[ \t]+$/, "", k); sub(/^[ \t]+/, "", v); sub(/\r$/, "", v)
+    if (k == "Type") type = v
+    else if (k == "Name") nm = v
+    else if (k == "Name[" lshort "]") lname1 = v
+    else if (k == "Name[" lfull "]") lname2 = v
+    else if (k == "GenericName") gn = v
+    else if (k == "GenericName[" lshort "]") lgen1 = v
+    else if (k == "GenericName[" lfull "]") lgen2 = v
+    else if (k == "Icon") icon = v
+    else if (k == "NoDisplay") nodisplay = v
+    else if (k == "Hidden") hidden = v
+    else if (k == "OnlyShowIn") only = v
+    else if (k == "NotShowIn") notin = v
+    else if (k == "Keywords") kw = v
+    else if (k == "Categories") cats = v
+    else if (k == "Exec") ex = v
+}
+END { flush() }
+' | sort -t "$(printf '\t')" -k1,1nr -k2,2 | cut -f3-

@@ -1,0 +1,26 @@
+#!/bin/sh
+# MediaPill — starts the now-playing bubble (bin/MediaPillUI) whenever a
+# player starts playing. Started once from bspwmrc.
+#
+# Costs one idle `playerctl -F` (event driven: it sleeps until a player
+# changes status). The UI runs only while there is music and exits by
+# itself (paused for a minute, or stopped).
+
+lock="${XDG_RUNTIME_DIR:-/tmp}/media-pill"
+ui="${0%/*}/MediaPillUI"
+
+# One watcher per session (bspwmrc runs again on a bspwm restart).
+exec 9>"$lock.watch"
+flock -n 9 || exit 0
+
+playerctl -F status 2>/dev/null | while IFS= read -r status; do
+    # The X session is gone (logged out): stop watching.
+    bspc wm -g >/dev/null 2>&1 || break
+    [ "$status" = Playing ] || continue
+    if [ -f "$lock.pid" ] && kill -0 "$(cat "$lock.pid")" 2>/dev/null; then
+        continue
+    fi
+    # setsid -f: the UI is adopted by init (no zombie here when it exits);
+    # it writes $lock.pid itself.
+    setsid -f "$ui" 9>&- >/dev/null 2>&1
+done

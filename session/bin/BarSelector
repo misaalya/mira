@@ -1,0 +1,92 @@
+#!/bin/sh
+# =============================================================
+# BarSelector — Dynamic topbar switcher for Mira (CardPicker strips).
+# Adapted from gh0stzk/dotfiles (GPL-3.0).
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-23 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
+BarPanel close-all >/dev/null 2>&1 || true
+
+current_theme="mira"
+[ -r "$MIRA_DIR/.theme" ] && read -r current_theme < "$MIRA_DIR/.theme"
+theme_conf="$MIRA_DIR/themes/$current_theme/theme.conf"
+
+current_bar=""
+while IFS='=' read -r key value; do
+    case "$key" in
+        main_bar)
+            value=${value#\"}
+            current_bar=${value%\"}
+            break
+            ;;
+    esac
+done < "$theme_conf"
+
+bars=$(find "$MIRA_DIR/bars/" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+[ -n "$bars" ] || exit 0
+
+IFS='
+'
+
+selected_index=-1
+index=0
+for bar in $bars; do
+    [ "${bar##*/}" = "$current_bar" ] && { selected_index=$index; break; }
+    index=$((index + 1))
+done
+
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/mira/bars"
+mkdir -p "$cache"
+strip() {
+    src="$1/preview-bar.webp" out="$cache/${1##*/}.png"
+    if [ ! -f "$out" ] || [ ! -f "$out.geo" ] || [ "$src" -nt "$out" ]; then
+        geo=$(magick "$src" -trim -write "$out" -format '%w %h %X %Y' info: 2>/dev/null)
+        printf '%s\n' "$geo" > "$out.geo"
+    fi
+    IFS=" " read -r w h x y < "$out.geo"
+    where=
+    case "$w$h$x$y" in *[!0-9+-]*|'') ;; *)
+        x=${x#+} y=${y#+}
+        if [ "$w" -ge $((h * 3)) ]; then
+            [ "$y" -lt 270 ] && where=TOP || where=BOTTOM
+            [ "$y" -lt 270 ] && [ $((y + h)) -gt 270 ] && where=
+        elif [ "$h" -ge $((w * 3)) ]; then
+            [ "$x" -lt 480 ] && where=LEFT || where=RIGHT
+        fi ;;
+    esac
+    printf '%s\t%s' "$out" "$where"
+}
+
+idx=$(
+    for bar in $bars; do
+        s=$(strip "$bar")
+        printf '%s\t%s\t%s\n' \
+            "$(printf '%s' "${bar##*/}" | tr '[:lower:]' '[:upper:]')" \
+            "${s#*	}" "${s%%	*}"
+    done | CardPicker --layout strips --card 960x540 \
+        --select "$selected_index" --active "$selected_index"
+)
+selected=
+case $idx in ''|*[!0-9]*) ;; *)
+    selected=$(printf '%s\n' "$bars" | sed -n "$((idx + 1))p")
+    selected=${selected##*/}
+    ;;
+esac
+unset IFS
+
+if [ -n "$selected" ] && [ "$selected" != "$current_bar" ]; then
+    sed -i "s/^main_bar=.*/main_bar=\"$selected\"/" "$theme_conf"
+    "$MIRA_DIR/bin/StopBars" >/dev/null 2>&1 || true
+    bspc config top_padding 1
+    bspc config bottom_padding 1
+    bspc config left_padding 1
+    bspc config right_padding 1
+    main_bar="$selected"
+    # shellcheck disable=SC1090
+    . "$MIRA_DIR/bars/$selected/Bar.bash"
+fi

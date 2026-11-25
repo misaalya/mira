@@ -1,0 +1,126 @@
+;; Vars ;;
+;; One poll for the whole panel (MediaControl --state: a single playerctl
+;; call -> JSON), plus the cover, which only changes with the song. eww runs
+;; them only while the panel is open.
+(defpoll music :interval "1s"
+	:initial '{"player":"","status":"Stopped","title":"","artist":"","pos":"0:00","posn":0,"len":"0:00","lenn":0,"shuffle":false,"loop":"None"}'
+	"MediaControl --state")
+(defpoll music-art :interval "3s" "MediaControl --cover")
+
+;; Widgets ;;
+(defwidget ctl [class action ?tooltip ?style]
+	(eventbox
+		:cursor "pointer"
+		(button
+			:class "ctl ${class}"
+			:style style
+			:onclick action
+			:tooltip tooltip
+			(children)
+		)
+	)
+)
+
+;; Music panel of the bar: opened by `BarPanel toggle music` (bar media
+;; icon, OpenApps --music/--player) against the bar, right side. Same look as
+;; the other bar panels: opaque $bg, title line, $fg accents, $font.
+;; States (nothing playing, shuffle/repeat off) dim with :style opacity, not
+;; with classes: eww 0.6 never removes a class that :class added before.
+(defwidget player []
+	(box
+		:class "player"
+		:orientation "v"
+		:space-evenly false
+		:spacing 10
+		(box
+			:class "head"
+			:space-evenly false
+			(label :class "caption" :halign "start" :hexpand true :text "Now playing")
+			(label :class "caption" :halign "end" :limit-width 18
+				:text {music.player}))
+		(box
+			:space-evenly false
+			:spacing 14
+			(box
+				:class "art"
+				:valign "start"
+				:style {music.player == "" ? "" : "background-image: url('${music-art}')"}
+				(label :class "art-icon" :visible {music.player == ""} :text "󰝚"))
+			(box
+				:class "body"
+				:orientation "v"
+				:space-evenly false
+				:hexpand true
+				:spacing 6
+				(label
+					:class "title"
+					:halign "start"
+					:xalign 0
+					:limit-width 26
+					:text {music.player == "" ? "Nothing playing" : music.title == "" ? "Unknown title" : music.title})
+				(label
+					:class "artist"
+					:halign "start"
+					:xalign 0
+					:limit-width 32
+					:text {music.player == "" ? "Start a player to see it here" : music.artist})
+				(box
+					:class "progress"
+					:orientation "v"
+					:space-evenly false
+					:spacing 2
+					(eventbox
+						:cursor "pointer"
+						(scale
+							:onchange "playerctl position {}"
+							:min 0
+							:max {music.lenn > 0 ? music.lenn : 1}
+							:value {music.posn}))
+					(box
+						:space-evenly false
+						(label :class "time" :halign "start" :hexpand true
+							:text {music.pos})
+						(label :class "time" :halign "end"
+							:text {music.len})))))
+		(box
+			:class "controls"
+			:style {music.player == "" ? "opacity: 0.35" : "opacity: 1"}
+			:space-evenly false
+			:halign "center"
+			:spacing 10
+			(ctl
+				:class ""
+				:style {music.shuffle ? "opacity: 1" : "opacity: 0.45"}
+				:tooltip "Shuffle"
+				:action "playerctl shuffle toggle"
+				"󰒟")
+			(ctl
+				:class "skip"
+				:action "MediaControl --previous"
+				"󰒮")
+			(ctl
+				:class "toggle"
+				:action "MediaControl --toggle"
+				{music.status == "Playing" ? "󰏤" : "󰐊"})
+			(ctl
+				:class "skip"
+				:action "MediaControl --next"
+				"󰒭")
+			(ctl
+				:class ""
+				:style {music.loop == "Playlist" || music.loop == "Track" ? "opacity: 1" : "opacity: 0.45"}
+				:tooltip "Repeat"
+				:action {music.loop == "Playlist" ? "playerctl loop track" :
+				music.loop == "Track" ? "playerctl loop none" : "playerctl loop playlist"}
+				{music.loop == "Track" ? "󰑘" : music.loop == "Playlist" ? "󰑖" : "󰑗"}))
+	)
+)
+
+;; Windows ;;
+;; Placement comes from `BarPanel toggle music` (--screen/--anchor/--pos).
+(defwindow music
+	:geometry (geometry :anchor "top right" :x "8px" :y "52px")
+	:stacking "fg"
+	:wm-ignore true
+	(player)
+)

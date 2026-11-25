@@ -1,0 +1,82 @@
+// Keybindings cheatsheet (bin/Help) — Mira monochrome styling.
+// Original work: https://github.com/gh0stzk/dotfiles
+// Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+// Copyright (C) 2026 Misaalya
+// Modified 2026-11-23 by Misaalya (Debian 13)
+// SPDX-License-Identifier: GPL-3.0-only
+
+@import "shared.rasi"
+
+configuration {
+    show-icons:                     false;
+    location:                       0;
+    click-to-exit:                  true;
+}
+
+window {
+    width:                          48%;
+    transparency:                   "real";
+    orientation:                    vertical;
+    border:                         1px;
+    border-color:                   @border-soft;
+    border-radius:                  14px;
+    background-color:               @background;
+}
+
+mainbox {
+    children:                       [ inputbar, listview ];
+    padding:                        14px;
+    spacing:                        10px;
+    background-color:               transparent;
+}
+
+inputbar {
+    children:                       [ prompt, entry ];
+    spacing:                        10px;
+    padding:                        4px 6px 12px 6px;
+    border:                         0px 0px 1px 0px;
+    border-color:                   @border-soft;
+    background-color:               transparent;
+}
+
+prompt {
+    background-color:               transparent;
+    text-color:                     @foreground-muted;
+    vertical-align:                 0.5;
+}
+
+entry {
+    text-color:                     @foreground;
+    placeholder:                    "Filter shortcuts";
+    placeholder-color:              @foreground-muted;
+    background-color:               transparent;
+    vertical-align:                 0.5;
+}
+
+listview {
+    columns:                        1;
+    lines:                          22;
+    spacing:                        2px;
+    fixed-height:                   true;
+    fixed-columns:                  true;
+    fixed-lines:                    true;
+    scrollbar:                      false;
+    background-color:               transparent;
+}
+
+element {
+    padding:                        6px 10px;
+    text-color:                     @foreground;
+    background-color:               transparent;
+    border-radius:                  8px;
+}
+
+element.selected.normal {
+    background-color:               @selected-soft;
+    text-color:                     @foreground;
+}
+
+element-text {
+    background-color:               inherit;
+    text-color:                     inherit;
+}

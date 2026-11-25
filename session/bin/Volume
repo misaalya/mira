@@ -1,0 +1,45 @@
+#!/bin/sh
+# Volume — PipeWire / PulseAudio volume control & OSD trigger for Mira.
+
+pct() {
+    pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null |
+        grep -o '[0-9]*%' | head -n 1 | tr -d '%'
+}
+
+muted() {
+    pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | grep -q 'yes'
+}
+
+notify_vol() {
+    if muted; then
+        notify-send -a Volume -h string:x-dunst-stack-tag:volume -h int:value:0 -t 1600 "Muted" "" 2>/dev/null
+    else
+        v=$(pct)
+        [ -n "$v" ] || v=0
+        notify-send -a Volume -h string:x-dunst-stack-tag:volume -h int:value:"$v" -t 1600 "Volume" "" 2>/dev/null
+    fi
+}
+
+case "${1:-}" in
+    --get)
+        pct
+        ;;
+    --inc)
+        pactl set-sink-mute @DEFAULT_SINK@ 0
+        pactl set-sink-volume @DEFAULT_SINK@ +5%
+        notify_vol
+        ;;
+    --dec)
+        pactl set-sink-mute @DEFAULT_SINK@ 0
+        pactl set-sink-volume @DEFAULT_SINK@ -5%
+        notify_vol
+        ;;
+    --toggle)
+        pactl set-sink-mute @DEFAULT_SINK@ toggle
+        notify_vol
+        ;;
+    *)
+        echo "usage: Volume [--get|--inc|--dec|--toggle]" >&2
+        exit 1
+        ;;
+esac

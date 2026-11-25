@@ -1,0 +1,300 @@
+# =============================================================
+# Mira — sxhkd keybindings
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-23 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+# Show keybind cheatsheet
+alt + F1
+    OpenApps --KeyHelp
+
+# -- Basic -- #
+
+# Open terminal
+super + Return
+    OpenApps --terminal
+
+# Open floating terminal
+super + alt + Return
+    OpenApps --floating
+
+# App launcher
+super + @space
+    OpenApps --menu
+
+# Theme selector
+alt + @space
+    RiceSelector
+
+# Topbar selector
+super + alt + @space
+    BarSelector
+
+# -- BSPWM Control -- #
+
+# Close window
+super + x
+    bspc node -c
+
+# Reload BSPWM
+super + alt + r
+    bspc wm -r
+
+# Reload sxhkd keybinds
+super + Escape
+    pkill -USR1 -x sxhkd; notify-send -a sxhkd -u low "sxhkd" "Keybindings reloaded"
+
+# Log out BSPWM session
+ctrl + super + alt + q
+    bspc quit
+
+# Soft reload daemons & bar
+ctrl + super + alt + s
+    SoftReload
+
+# -- Window States -- #
+
+# Kill window
+super + shift + x
+    bspc node -k
+
+# Tiled mode
+super + shift + t
+    bspc node -t '~tiled'
+
+# Toggle floating mode
+super + shift + a
+    ScrollKey float
+
+# Toggle floating mode (alias)
+super + v
+    ScrollKey float
+
+# Fullscreen mode
+super + shift + f
+    bspc node -t '~fullscreen'
+
+# Hide window
+alt + h
+    HideNode --hide
+
+# Restore hidden window
+ctrl + alt + h
+    HideNode --menu
+
+# -- Desktop Layout -- #
+
+# Toggle scrolling columns / tiling layout
+super + alt + z
+    Layout toggle-scroll
+
+# Next tiling layout
+super + alt + t
+    Layout next
+
+# Previous tiling layout
+super + alt + shift + t
+    Layout prev
+
+# -- Move & Resize -- #
+
+# Rotate desktop 90°
+super + slash
+    bspc node @parent -R 90
+
+# Balance window sizes
+super + equal
+    bspc node @/ -B
+
+# Shrink column / window width
+super + ctrl + {Left,h}
+    ScrollKey resize west
+
+# Expand column / window width
+super + ctrl + {Right,l}
+    ScrollKey resize east
+
+# Expand window height
+super + ctrl + {Down,j}
+    ScrollKey resize south
+
+# Shrink window height
+super + ctrl + {Up,k}
+    ScrollKey resize north
+
+# Cycle scroll column preset widths
+super + {comma,period}
+    ScrollKey preset {prev,next}
+
+# Grow floating window
+super + ctrl + plus
+    bspc node -z top_left -50 -25; bspc node -z bottom_right 50 25
+
+# Shrink floating window
+super + ctrl + minus
+    bspc node -z top_left 50 25; bspc node -z bottom_right -50 -25
+
+# -- Navigation -- #
+
+# Switch workspace
+super + {Left,Right}
+    bspc desktop -f {prev,next}
+
+# Go to workspace 1-10
+super + {1-9,0}
+    bspc desktop -f '^{1-9,10}'
+
+# Send window to workspace 1-10
+super + ctrl + {1-9,0}
+    bspc node -d '^{1-9,10}'
+
+# Send window to adjacent workspace and follow
+ctrl + shift + {Left,Right}
+    bspc node -d {prev,next} '--follow'
+
+# Move focus directionally
+super + alt + {Left,Right,Up,Down}
+    ScrollKey focus {west,east,north,south}
+
+# Focus last window
+ctrl + shift + comma
+    bspc node -f last
+
+# Focus last desktop
+ctrl + shift + period
+    bspc desktop -f last
+
+# Swap focused window directionally
+super + shift + {Left,Right,Up,Down}
+    ScrollKey swap {west,east,north,south}
+
+# Swap scroll column left / right
+super + shift + {comma,period}
+    ScrollKey swap {west,east}
+
+# Window switcher (Alt-Tab)
+alt + Tab
+    WindowSwitch
+
+# -- Apps -- #
+
+# Browser
+super + b
+    OpenApps --browser
+
+# Editor
+super + e
+    OpenApps --editor
+
+# File manager (yazi)
+super + f
+    OpenApps --filemanager
+
+# Yazi terminal file manager
+super + y
+    OpenApps --yazi
+
+# Music panel
+super + m
+    OpenApps --music
+
+# Sound mixer (pavucontrol)
+super + p
+    OpenApps --soundcontrol
+
+# -- Panels & Pickers -- #
+
+# Wallpaper gallery picker
+super + alt + w
+    WallSelect
+
+# Wi-Fi panel
+super + alt + n
+    OpenApps --netmanager
+
+# Bluetooth panel
+super + alt + b
+    OpenApps --bluetooth
+
+# Clipboard history panel
+super + alt + c
+    OpenApps --clipboard
+
+# Notification center
+super + alt + d
+    NotifPanel
+
+# Screenshot UI
+super + alt + s
+    OpenApps --screenshot
+
+# Screenshot UI (Print)
+Print
+    OpenApps --screenshot
+
+# Screenshot current monitor
+shift + Print
+    Shot --screen
+
+# Screenshot active window
+alt + Print
+    Shot --window
+
+# Screenshot UI (copy to clipboard only)
+ctrl + Print
+    Shot --clipboard
+
+# Power menu
+super + alt + p
+    OpenApps --powermenu
+
+# -- System -- #
+
+# Power off
+ctrl + super + alt + p
+    systemctl poweroff
+
+# Reboot
+ctrl + super + alt + r
+    systemctl reboot
+
+# Lock screen
+ctrl + super + alt + l
+    ScreenLocker
+
+# Lock screen (alias)
+super + l
+    ScreenLocker
+
+# Hide topbar
+super + alt + h
+    HideBar -h
+
+# Show topbar
+super + alt + u
+    HideBar -u
+
+# Adjust window opacity
+ctrl + alt + plus
+    picom-trans -c -3
+
+ctrl + alt + minus
+    picom-trans -c +3
+
+ctrl + alt + t
+    picom-trans -c -d
+
+# Brightness
+XF86MonBrightness{Up,Down}
+    Brightness {up,down}
+
+# Volume
+XF86Audio{RaiseVolume,LowerVolume,Mute}
+    Volume {--inc,--dec,--toggle}
+
+# Media playback
+XF86Audio{Next,Prev,Play,Stop}
+    MediaControl {--next,--previous,--toggle,--stop}

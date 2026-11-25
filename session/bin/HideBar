@@ -1,0 +1,75 @@
+#!/bin/sh
+# =============================================================
+# HideBar — Hide or restore the Mira topbar and adjust BSPWM padding.
+# Adapted from gh0stzk/dotfiles (GPL-3.0).
+# Original work: https://github.com/gh0stzk/dotfiles
+# Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>
+# Copyright (C) 2026 Misaalya
+# Modified 2026-11-23 by Misaalya (Debian 13)
+# SPDX-License-Identifier: GPL-3.0-only
+# =============================================================
+
+MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
+current_theme="mira"
+[ -r "$MIRA_DIR/.theme" ] && read -r current_theme < "$MIRA_DIR/.theme"
+THEME_CONFIG="$MIRA_DIR/themes/$current_theme/theme.conf"
+
+current_bar=""
+while IFS='=' read -r key value; do
+    case "$key" in
+        main_bar)
+            value=${value#\"}
+            current_bar=${value%\"}
+            break
+            ;;
+    esac
+done < "$THEME_CONFIG"
+
+get_paddings() {
+    awk -F'"' '
+        /^TOP_PADDING=/    { top = $2 }
+        /^BOTTOM_PADDING=/ { bottom = $2 }
+        /^LEFT_PADDING=/   { left = $2 }
+        /^RIGHT_PADDING=/  { right = $2 }
+        END { printf "%s %s %s %s\n", (top != "" ? top : 1), (bottom != "" ? bottom : 1), (left != "" ? left : 1), (right != "" ? right : 1) }
+    ' "$THEME_CONFIG"
+}
+
+set_padding() {
+    bspc config top_padding "$1"
+    bspc config bottom_padding "$2"
+    bspc config left_padding "$3"
+    bspc config right_padding "$4"
+}
+
+toggle_bar() {
+    action="$1"
+    eww_bar_path="$MIRA_DIR/bars/$current_bar"
+    if [ -f "$eww_bar_path/eww.yuck" ]; then
+        if [ "$action" = "hide" ]; then
+            eww -c "$eww_bar_path" close-all
+        else
+            for m in $(bspc query -M --names); do
+                eww -c "$eww_bar_path" open bar --id "$m" --arg monitor="$m"
+            done
+        fi
+    else
+        polybar-msg cmd "$action" >/dev/null 2>&1 || true
+    fi
+}
+
+case "${1:-}" in
+    -h|--hide)
+        set_padding 1 1 1 1
+        toggle_bar hide
+        ;;
+    -u|--unhide)
+        # shellcheck disable=SC2046
+        set_padding $(get_paddings)
+        toggle_bar show
+        ;;
+    *)
+        echo "Usage: HideBar [-h|--hide] [-u|--unhide]" >&2
+        exit 1
+        ;;
+esac

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-50 -80 550 270" width="550" height="270" shape-rendering="crispEdges" role="img" aria-label="Mira">
+  <title>Mira</title>
+  <style>
+    .s1, .s2 { opacity: 0; }
+    @media (prefers-reduced-motion: no-preference) {
+      .s0 { animation: s0 5s steps(1, end) infinite; }
+      .s1 { animation: s1 5s steps(1, end) infinite; }
+      .s2 { animation: s2 5s steps(1, end) infinite; }
+    }
+    @keyframes s0 { 0% { opacity: 1; } 84% { opacity: 0; } 93% { opacity: 1; } 100% { opacity: 1; } }
+    @keyframes s1 { 0% { opacity: 0; } 84% { opacity: 1; } 87% { opacity: 0; } 90% { opacity: 1; } 93% { opacity: 0; } 100% { opacity: 0; } }
+    @keyframes s2 { 0% { opacity: 0; } 87% { opacity: 1; } 90% { opacity: 0; } 100% { opacity: 0; } }
+  </style>
+  <path fill="#e8e8e8" d="M0 10H10V0H40V10H50V20H60V30H70V20H80V10H90V0H120V10H130V180H100V30H90V40H80V50H70V60H60V50H50V40H40V30H30V180H0V10ZM160 0H190V180H160V0ZM220 0H300V10H310V20H320V70H310V80H300V100H310V110H320V180H290V110H280V100H270V90H250V180H220V0ZM250 20V70H290V20H250ZM350 30H360V20H370V10H380V0H420V10H430V20H440V30H450V180H420V120H380V180H350V30ZM380 30V100H420V30H410V20H390V30H380Z"/>
+  <g fill="#d9d84a">
+    <path class="s0" d="M420 -30H440V-40H450V-70H460V-40H470V-30H490V-20H470V-10H460V20H450V-10H440V-20H420V-30Z"/>
+    <path class="s1" d="M430 -30H450V-50H460V-30H480V-20H460V0H450V-20H430V-30Z"/>
+    <path class="s2" d="M440 -30H450V-40H460V-30H470V-20H460V-10H450V-20H440V-30Z"/>
+  </g>
+</svg>
