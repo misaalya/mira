@@ -43,19 +43,7 @@ set_padding() {
 }
 
 toggle_bar() {
-    action="$1"
-    eww_bar_path="$MIRA_DIR/bars/$current_bar"
-    if [ -f "$eww_bar_path/eww.yuck" ]; then
-        if [ "$action" = "hide" ]; then
-            eww -c "$eww_bar_path" close-all
-        else
-            for m in $(bspc query -M --names); do
-                eww -c "$eww_bar_path" open bar --id "$m" --arg monitor="$m"
-            done
-        fi
-    else
-        polybar-msg cmd "$action" >/dev/null 2>&1 || true
-    fi
+    polybar-msg cmd "$1" >/dev/null 2>&1 || true
 }
 
 case "${1:-}" in

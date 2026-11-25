@@ -67,7 +67,7 @@ xsetroot -cursor_name left_ptr 2>/dev/null || true
 echo "Xft.dpi: 96" | xrdb -merge 2>/dev/null || true
 setxkbmap -layout us 2>/dev/null || true
 
-# Start picom first so polybar/GTK/eww obtain an ARGB visual.
+# Start picom first so polybar and GTK3 panels obtain an ARGB visual.
 if [ -z "${MIRA_NO_PICOM:-}" ] && command -v picom >/dev/null 2>&1; then
     # PicomWatch restarts picom if it dies and logs why (~/.cache/mira/picom.log).
     "${MIRA_DIR}/bin/PicomWatch" --config "${MIRA_DIR}/config/picom/picom.conf" >/dev/null 2>&1 &
@@ -114,11 +114,6 @@ if command -v polybar-msg >/dev/null 2>&1; then
             polybar-msg action "#layout.hook.0" >/dev/null 2>&1 || true
         done
     ) >/dev/null 2>&1 &
-fi
-
-# Eww daemon for Sound & Music topbar panels
-if command -v eww >/dev/null 2>&1; then
-    eww -c "${BSPWM_EWW_DIR:-$MIRA_DIR/eww}" daemon >/dev/null 2>&1 &
 fi
 
 # Polkit agent (skip in isolated test sandboxes)

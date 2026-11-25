@@ -1,6 +1,6 @@
 #!/bin/sh
 # =============================================================
-# MediaControl — MPRIS (playerctl) front-end for Mira bar & eww.
+# MediaControl — MPRIS (playerctl) front-end for Mira bar & MusicPanel.
 # Adapted from gh0stzk/dotfiles (GPL-3.0).
 # Original work: https://github.com/gh0stzk/dotfiles
 # Copyright (C) 2021-2026 gh0stzk <z0mbi3.zk@protonmail.com>

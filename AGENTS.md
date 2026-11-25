@@ -18,15 +18,14 @@ src/
   misa-backdrop/    Backdrop blur/dim + passive Escape grab (Rust, 0 crate)
   misa-wall/        Engine wallpaper X11 SIMD AVX2/SSE2 + MIT-SHM (Rust)
   misa-ui/          Popup & overlay GTK3 dalam C (NotifPanel, ClipPanel,
-                    WifiPanel, BluetoothPanel, MediaPillUI, CardPicker,
-                    WindowSwitch, WaitCompositor)
+                    WifiPanel, BluetoothPanel, SoundPanel, MusicPanel,
+                    MediaPillUI, CardPicker, WindowSwitch, WaitCompositor)
 session/
   bspwmrc           Autostart sesi BSPWM (display-scoped, mendukung $MIRA_CONFIG_DIR)
   session.sh        Entry point SDDM ("Mira (BSPWM)")
   themes/mira/      Tema bawaan: Mira (theme.conf + walls/)
   bars/             Varian topbar Polybar monokrom (mira, mira-float, mira-islands,
                     mira-line, mira-minimal)
-  eww/              Panel Sound (volume) & Music (player)
   config/
     sxhkdrc         Shortcut bersih khusus Mira
     system.ini      Variabel hardware (diisi otomatis oleh SetSysVars)
@@ -51,7 +50,7 @@ tools/
 1. **Jangan Ganggu Sesi Live (`:0`) & Deploy Otomatis:**
    - Uji seluruh perubahan di sandbox Xephyr terisolasi (`./tools/dev-session.sh`),
      yang mengisolasi `MIRA_CONFIG_DIR`, `MIRA_SANDBOX=1`, `XDG_RUNTIME_DIR`,
-     `XDG_CACHE_HOME`, `BSPWM_SOCKET`, `BSPWM_EWW_DIR`, dan `dbus-run-session`.
+     `XDG_CACHE_HOME`, `BSPWM_SOCKET`, dan `dbus-run-session`.
    - Setelah perubahan selesai dan terverifikasi, selalu jalankan `./tools/deploy.sh`
      untuk menerapkan perubahan ke `~/.config/bspwm`.
    - Tutup Xephyr setelah selesai; kill proses hanya per PID.

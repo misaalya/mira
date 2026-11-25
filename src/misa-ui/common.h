@@ -42,9 +42,10 @@ void ungrab(void);
 int backdrop(Rect r, int pid, const char *click);
 void drop_backdrop(int pid);
 
-/* Close every other top-bar popup (eww volume/music, ClipPanel, NotifPanel,
- * WifiPanel, BluetoothPanel, rofi) so only one bar popup is ever open.
- * `except` is the caller's own name ("clip", "notif", "wifi", "bt") or NULL. */
+/* Close every other top-bar popup (SoundPanel, MusicPanel, ClipPanel,
+ * NotifPanel, WifiPanel, BluetoothPanel, rofi) so only one bar popup is ever
+ * open. `except` is the caller's own name ("clip", "notif", "wifi", "bt",
+ * "sound", "music") or NULL. */
 void close_bar_popups(const char *except);
 
 /* Pictures, the same pixels as misa_ui.py made: scaled to cover w x h

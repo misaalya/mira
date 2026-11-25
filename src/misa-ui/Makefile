@@ -4,7 +4,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -pipe -Wall -Wextra -Wno-unused-parameter
 PKG = gtk+-3.0
 OUT ?= build
-TOOLS = ClipPanel WindowSwitch MediaPillUI CardPicker WaitCompositor WifiPanel BluetoothPanel NotifPanel
+TOOLS = ClipPanel WindowSwitch MediaPillUI CardPicker WaitCompositor WifiPanel BluetoothPanel NotifPanel SoundPanel MusicPanel
 
 all: $(addprefix $(OUT)/,$(TOOLS))
 
@@ -48,3 +48,13 @@ $(OUT)/NotifPanel: notif-panel.c common.c common.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $(shell pkg-config --cflags $(PKG) gio-2.0) -o $@ notif-panel.c common.c \
 		$(shell pkg-config --libs $(PKG) gio-2.0) -lm
+
+$(OUT)/SoundPanel: sound-panel.c common.c common.h
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $(shell pkg-config --cflags $(PKG)) -o $@ sound-panel.c common.c \
+		$(shell pkg-config --libs $(PKG)) -lm
+
+$(OUT)/MusicPanel: music-panel.c common.c common.h
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $(shell pkg-config --cflags $(PKG)) -o $@ music-panel.c common.c \
+		$(shell pkg-config --libs $(PKG)) -lm

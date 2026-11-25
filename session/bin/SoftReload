@@ -11,7 +11,6 @@
 
 MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
 DISPLAY="${DISPLAY:-:0}"
-main_eww="${BSPWM_EWW_DIR:-$MIRA_DIR/eww}"
 reloaded=""
 
 signal_display() {
@@ -39,11 +38,6 @@ fi
 signal_display USR1 picom && reloaded="${reloaded}• Picom\n"
 signal_display HUP xsettingsd && reloaded="${reloaded}• GTK Settings\n"
 signal_display USR1 sxhkd && reloaded="${reloaded}• SXHKD\n"
-
-# Reload eww panels (volume/music)
-if command -v eww >/dev/null 2>&1 && eww ping -c "$main_eww" >/dev/null 2>&1; then
-    eww reload -c "$main_eww" >/dev/null 2>&1 && reloaded="${reloaded}• Eww Panels\n"
-fi
 
 if [ -n "$reloaded" ] && command -v notify-send >/dev/null 2>&1; then
     notify-send -a Mira -i dialog-information "Mira Reloaded" "$(printf '%b' "$reloaded")"

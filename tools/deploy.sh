@@ -44,7 +44,6 @@ else
         --exclude='themes/*/walls/' \
         --exclude='bars/colors.ini' \
         --exclude='bars/colors.scss' \
-        --exclude='eww/colors.scss' \
         --exclude='config/x-shot.conf' \
         --exclude='config/rofi/shared.rasi' \
         --exclude='config/xsettingsd.conf' \
@@ -55,6 +54,8 @@ else
         --exclude='bin/ClipPanel' \
         --exclude='bin/WifiPanel' \
         --exclude='bin/BluetoothPanel' \
+        --exclude='bin/SoundPanel' \
+        --exclude='bin/MusicPanel' \
         --exclude='bin/NotifPanel' \
         --exclude='bin/WindowSwitch' \
         --exclude='bin/MediaPillUI' \

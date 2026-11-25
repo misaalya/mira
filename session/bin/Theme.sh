@@ -53,11 +53,6 @@ export DISPLAY
 # Stop running bars on this X display cleanly before rebuilding.
 "$MIRA_DIR/bin/StopBars" >/dev/null 2>&1 || true
 
-for p in $(pgrep -f '^(/[^ ]*/)?eww -c .*/bars/' 2>/dev/null); do
-    d=$(tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null | sed -n 's/^DISPLAY=//p' | head -n 1)
-    [ "$d" = "$DISPLAY" ] && kill "$p" 2>/dev/null || true
-done
-
 # Atomic writer shared with config/modules/*.sh
 _write() {
     target=$1

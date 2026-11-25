@@ -62,7 +62,6 @@ export XDG_RUNTIME_DIR="$SANDBOX/run"
 export XDG_CACHE_HOME="$SANDBOX/cache"
 export XDG_DATA_HOME="$SANDBOX/data"
 export XDG_STATE_HOME="$SANDBOX/state"
-export BSPWM_EWW_DIR="$SANDBOX/config/bspwm/eww"
 export BSPWM_SOCKET="$SANDBOX/bspwm.sock"
 export PATH="$SANDBOX/config/bspwm/bin:$PATH"
 

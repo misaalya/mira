@@ -7,7 +7,7 @@
 # processes that map them, so the numbers add up) from
 # /proc/<pid>/smaps_rollup. A process belongs to Mira when it runs from the
 # config dir ($MIRA_CONFIG_DIR, default ~/.config/bspwm) or is one of the
-# session's core programs (bspwm, sxhkd, picom, polybar, eww, xsettingsd),
+# session's core programs (bspwm, sxhkd, picom, polybar, xsettingsd),
 # plus everything those start (bspc subscribe, playerctl, xev, ...), except
 # apps launched from keybindings (children of sxhkd / bspwm). Only processes
 # on DISPLAY (default: this one) are counted.
@@ -50,7 +50,7 @@ sample() {
             split($1, f, " ")
             pid = f[1]; ppid[pid] = f[2]; dsp[pid] = f[3]; pss[pid] = f[4]; comm[pid] = f[5]
             args = $2
-            core = (comm[pid] ~ /^(bspwm|sxhkd|picom|polybar|eww|xsettingsd)$/)
+            core = (comm[pid] ~ /^(bspwm|sxhkd|picom|polybar|xsettingsd)$/)
             mira[pid] = (core || index(args, dir "/") > 0) && pid != self
             launcher[pid] = (comm[pid] == "sxhkd" || comm[pid] == "bspwm")
         }

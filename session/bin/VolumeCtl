@@ -1,18 +1,12 @@
 #!/bin/sh
-# VolumeCtl — the volume panel of the top bar (eww window "volume") and the
-# pactl calls behind it.
+# VolumeCtl — top-bar sound popup launcher (SoundPanel) and pactl helpers.
 #
-#   VolumeCtl popup [--pointer]  toggle the panel under the bar, right side,
-#                                on the monitor of the click or the focused one
-#   VolumeCtl close              close it
-#   VolumeCtl state              JSON for the panel: vol, mute, mic, micmute
+#   VolumeCtl popup [--pointer]  toggle SoundPanel under the bar
+#   VolumeCtl close              close any open bar popup
+#   VolumeCtl state              JSON: vol, mute, mic, micmute
 #   VolumeCtl device             description of the default output
 #   VolumeCtl set N | mic N      set output / input volume (unmutes)
 #   VolumeCtl mute | micmute     toggle mute
-#
-# Placement, one-panel-at-a-time and auto-close: bin/BarPanel.
-# Cost: nothing while closed (eww only polls for open windows); while open,
-# `state` runs every second (four pactl queries, ~20ms).
 
 pct() { pactl "$1" "$2" 2>/dev/null | grep -o '[0-9]*%' | head -n 1 | tr -d %; }
 yes_no() { pactl "$1" "$2" 2>/dev/null | grep -q 'yes' && echo true || echo false; }
@@ -41,7 +35,7 @@ case "${1:-}" in
     mute)    pactl set-sink-mute @DEFAULT_SINK@ toggle ;;
     micmute) pactl set-source-mute @DEFAULT_SOURCE@ toggle ;;
     close)   BarPanel close-all ;;
-    popup)   BarPanel toggle volume ${2:+"$2"} ;;
+    popup)   exec SoundPanel ${2:+"$2"} ;;
     *)
         sed -n '2,14p' "$0"
         exit 1

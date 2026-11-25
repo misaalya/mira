@@ -1,38 +1,15 @@
 #!/bin/sh
-# BarPanel — the eww panels opened from the bar (volume, music), and the
-# single-popup coordinator for all top-bar popups.
+# BarPanel — top-bar popup dispatcher & single-popup coordinator.
 #
-#   BarPanel toggle <window> [--pointer] [--side left|right]
+#   BarPanel toggle volume|music [--pointer] [--side left|right]
 #   BarPanel close-all
 #
-# toggle: closes it if it is open; otherwise closes every other bar popup
-#   (eww, ClipPanel, NotifPanel, WifiPanel, BluetoothPanel, rofi) and opens
-#   <window> against the bar (top or bottom, bin/BarAnchor).
-#   --pointer (a click on a bar icon): on the monitor of the click, centred
-#     under the pointer, i.e. under the icon, kept 8px inside the monitor.
-#   otherwise (keyboard): on the focused monitor, at --side (default right).
-#
-# Closing: click outside (backdrop), press Escape (misa-backdrop catches
-# Escape while open), click the bar icon again, open any other bar popup, or
-# leave the pointer outside the panel and bar for ~1.5s.
+# Delegates volume/music popups to the native GTK3 binaries SoundPanel and
+# MusicPanel (one-shot, 0 MiB RAM when closed) and can close every active
+# bar popup (ClipPanel, NotifPanel, WifiPanel, BluetoothPanel, SoundPanel,
+# MusicPanel, rofi).
 
-MIRA_DIR="${MIRA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/bspwm}"
-EWW="eww -c ${BSPWM_EWW_DIR:-$MIRA_DIR/eww}"
-
-# Panel widths in px, to centre a panel under the icon before it is shown
-# (eww cannot move a window afterwards). Measured with the panels' CSS
-# min-widths; update when a panel's width changes. Unknown: 360.
-panel_width() {
-    case $1 in
-        volume) echo 354 ;;
-        music)  echo 410 ;;
-        *)      echo 360 ;;
-    esac
-}
-PANELS="volume music"
 RUN="${XDG_RUNTIME_DIR:-/tmp}"
-PIDF="$RUN/bspwm-barpanel.$(id -u).pid"
-BDPIDF="$RUN/bspwm-barpanel.$(id -u).bdpid"
 
 kill_checked() {
     f="$RUN/$1" expect=$2
@@ -61,153 +38,51 @@ wait_gone() {
     done
 }
 
-close_eww() {
-    had=0
-    killed=""
-    if [ -f "$BDPIDF" ]; then
-        bp=$(kill_checked "${BDPIDF##*/}" "misa-backdrop") && killed="$killed $bp"
-        rm -f "$BDPIDF"
-        had=1
-    fi
-    if [ -f "$PIDF" ]; then
-        wp=$(kill_checked "${PIDF##*/}" "BarPanel") && killed="$killed $wp"
-        rm -f "$PIDF"
-        had=1
-    fi
-    [ -n "$killed" ] && wait_gone "$killed"
-    if [ "$had" = 1 ] || [ "${1:-}" = force ]; then
-        # shellcheck disable=SC2086
-        $EWW close $PANELS >/dev/null 2>&1
-    fi
-}
-
-close_others() {
+close_all() {
     # Resident GTK daemons (instant non-blocking FIFO close).
-    if [ -p "$RUN/clip-panel.fifo" ] && [ -r "$RUN/clip-panel.pid" ]; then
-        cpid=$(cat "$RUN/clip-panel.pid" 2>/dev/null)
-        [ -n "$cpid" ] && kill -0 "$cpid" 2>/dev/null && printf 'close\n' >"$RUN/clip-panel.fifo" 2>/dev/null
-    fi
-    if [ -p "$RUN/notif-panel.fifo" ] && [ -r "$RUN/notif-panel.pid" ]; then
-        npid=$(cat "$RUN/notif-panel.pid" 2>/dev/null)
-        [ -n "$npid" ] && kill -0 "$npid" 2>/dev/null && printf 'close\n' >"$RUN/notif-panel.fifo" 2>/dev/null
-    fi
-    if [ -p "$RUN/wifi-panel.fifo" ] && [ -r "$RUN/wifi-panel.pid" ]; then
-        wpid=$(cat "$RUN/wifi-panel.pid" 2>/dev/null)
-        [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null && printf 'close\n' >"$RUN/wifi-panel.fifo" 2>/dev/null
-    fi
+    for spec in "clip-panel.fifo:clip-panel.pid" "notif-panel.fifo:notif-panel.pid" "wifi-panel.fifo:wifi-panel.pid"; do
+        fifo="$RUN/${spec%%:*}"
+        pidf="$RUN/${spec#*:}"
+        if [ -p "$fifo" ] && [ -r "$pidf" ]; then
+            pid=$(cat "$pidf" 2>/dev/null)
+            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && printf 'close\n' >"$fifo" 2>/dev/null
+        fi
+    done
+
     # One-shot popups holding an X11 grab: SIGTERM and wait briefly so a new
-    # rofi/panel grab never collides with the outgoing one.
+    # popup grab never collides with the outgoing one.
     pids=""
     if [ ! -p "$RUN/wifi-panel.fifo" ]; then
         p=$(kill_checked "wifi-panel.pid" "WifiPanel") && pids="$pids $p"
     fi
-    for spec in "bt-panel.pid:BluetoothPanel" "rofi.pid:rofi"; do
+    for spec in \
+        "bt-panel.pid:BluetoothPanel" \
+        "sound-panel.pid:SoundPanel" \
+        "music-panel.pid:MusicPanel" \
+        "rofi.pid:rofi"; do
         p=$(kill_checked "${spec%%:*}" "${spec#*:}") && pids="$pids $p"
     done
     wait_gone "$pids"
 }
 
-close_all() {
-    close_eww "${1:-}"
-    close_others
-}
-
-is_open() {
-    $EWW active-windows 2>/dev/null | grep -q "^$1:"
-}
-
-# watch <window> <armed> <mon_x> <mon_y> <mon_w> <mon_h> <edge> <bar>
-watch_pointer() {
-    win_name="Eww - $1" armed=$2 mx=$3 my=$4 mw=$5 mh=$6 edge=$7 bar=$8 away=0
-    if [ "$edge" = top ]; then
-        by0=$my by1=$((my + bar))
-    else
-        by0=$((my + mh - bar)) by1=$((my + mh))
-    fi
-    sleep 0.4
-    while :; do
-        win=$(xdotool search --onlyvisible --name "^$win_name\$" 2>/dev/null | head -n 1)
-        [ -n "$win" ] || break
-        eval "$(xdotool getwindowgeometry --shell "$win" 2>/dev/null)"
-        wx=$X wy=$Y ww=$WIDTH wh=$HEIGHT
-        eval "$(xdotool getmouselocation --shell 2>/dev/null)"
-        if [ "$X" -ge $((wx - 12)) ] && [ "$X" -le $((wx + ww + 12)) ] &&
-           [ "$Y" -ge $((wy - 12)) ] && [ "$Y" -le $((wy + wh + 12)) ]; then
-            armed=1 away=0                      # on the panel
-        elif [ "$X" -ge "$mx" ] && [ "$X" -lt $((mx + mw)) ] &&
-             [ "$Y" -ge "$by0" ] && [ "$Y" -lt "$by1" ]; then
-            away=0                              # on the bar
-        elif [ "$armed" = 1 ]; then
-            away=$((away + 1))
-            if [ "$away" -ge 3 ]; then
-                $EWW close "$1" >/dev/null 2>&1
-                break
-            fi
-        fi
-        sleep 0.5
-    done
-    read -r self _ </proc/self/stat
-    if [ "$(cat "$PIDF" 2>/dev/null)" = "$self" ]; then
-        [ -f "$BDPIDF" ] && kill_checked "${BDPIDF##*/}" "misa-backdrop" >/dev/null
-        rm -f "$PIDF" "$BDPIDF"
-    fi
-}
-
 case "${1:-}" in
     close-all)
-        close_all "${2:-}"
+        close_all
         ;;
     toggle)
         window=${2:?window name}
         shift 2
-        pointer= side=right
-        while [ $# -gt 0 ]; do
-            case $1 in
-                --pointer) pointer=1 ;;
-                --side) side=${2:-right}; shift ;;
-            esac
-            shift
-        done
-
-        if is_open "$window"; then
-            close_eww force
-            exit 0
-        fi
-        close_all
-
-        set -- $(BarAnchor ${pointer:+--pointer})
-        mon=$1 edge=$2 off=$3
-        rect=$(bspc query -T -m "$mon" | grep -o '"rectangle":{[^}]*}' | head -n 1)
-        mx=${rect#*\"x\":}; mx=${mx%%,*}
-        my=${rect#*\"y\":}; my=${my%%,*}
-        mw=${rect#*\"width\":}; mw=${mw%%,*}
-        mh=${rect#*\"height\":}; mh=${mh%%\}*}
-
-        if [ -n "$pointer" ]; then
-            eval "$(xdotool getmouselocation --shell 2>/dev/null)"
-            w=$(panel_width "$window")
-            x=$(( ${X:-0} - mx - w / 2 ))
-            [ "$x" -gt $((mw - w - 8)) ] && x=$((mw - w - 8))
-            [ "$x" -lt 8 ] && x=8
-            anchor="$edge left"
-        else
-            x=8 anchor="$edge $side"
-        fi
-        # The watcher first: the backdrop (dim + blur behind the panel) lives
-        # as long as it does; clicking it or pressing Escape closes the panel.
-        watch_pointer "$window" "${pointer:-0}" "$mx" "$my" "$mw" "$mh" "$edge" "$off" &
-        wpid=$!
-        echo "$wpid" >"$PIDF"
-        bd=$(Backdrop ${pointer:+--pointer} --pid "$wpid" --click "BarPanel close-all force")
-        [ -n "$bd" ] && echo "$bd" >"$BDPIDF"
-        $EWW open "$window" --screen "$mon" --anchor "$anchor" \
-            --pos "${x}x$((off + 6))" >/dev/null 2>&1 ||
-            $EWW open "$window" --screen 0 --anchor "$anchor" \
-                --pos "${x}x$((off + 6))" >/dev/null 2>&1 ||
-            { close_eww force; exit 1; }
+        case "$window" in
+            volume|sound) exec SoundPanel "$@" ;;
+            music|player) exec MusicPanel "$@" ;;
+            *)
+                echo "BarPanel: unknown panel '$window'" >&2
+                exit 1
+                ;;
+        esac
         ;;
     *)
-        sed -n '2,18p' "$0"
+        sed -n '2,10p' "$0"
         exit 1
         ;;
 esac

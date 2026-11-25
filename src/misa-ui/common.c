@@ -396,7 +396,7 @@ void close_bar_popups(const char *except) {
     if (g_strcmp0(except, "clip") != 0)  fifo_close(run, "clip-panel.fifo");
     if (g_strcmp0(except, "notif") != 0) fifo_close(run, "notif-panel.fifo");
 
-    int killed[5];
+    int killed[6];
     int nk = 0;
     int p;
     if (g_strcmp0(except, "wifi") != 0 && !fifo_close(run, "wifi-panel.fifo")) {
@@ -405,34 +405,12 @@ void close_bar_popups(const char *except) {
     }
     if (g_strcmp0(except, "bt") != 0 && (p = kill_pidfile(run, "bt-panel.pid", "BluetoothPanel")) > 0)
         killed[nk++] = p;
+    if (g_strcmp0(except, "sound") != 0 && (p = kill_pidfile(run, "sound-panel.pid", "SoundPanel")) > 0)
+        killed[nk++] = p;
+    if (g_strcmp0(except, "music") != 0 && (p = kill_pidfile(run, "music-panel.pid", "MusicPanel")) > 0)
+        killed[nk++] = p;
     if (g_strcmp0(except, "rofi") != 0 && (p = kill_pidfile(run, "rofi.pid", "rofi")) > 0)
         killed[nk++] = p;
-
-    /* Close open eww bar panels (volume / music) only if their watcher or
-     * backdrop pidfile exists (0 fork when no eww panel is open). */
-    char pfile[64], bdfile[64];
-    unsigned long uid = (unsigned long)getuid();
-    g_snprintf(pfile, sizeof pfile, "bspwm-barpanel.%lu.pid", uid);
-    g_snprintf(bdfile, sizeof bdfile, "bspwm-barpanel.%lu.bdpid", uid);
-    char *ppath = g_build_filename(run, pfile, NULL);
-    char *bdpath = g_build_filename(run, bdfile, NULL);
-    gboolean eww_open = g_file_test(ppath, G_FILE_TEST_EXISTS) || g_file_test(bdpath, G_FILE_TEST_EXISTS);
-    if (eww_open) {
-        if ((p = kill_pidfile(run, bdfile, "misa-backdrop")) > 0) killed[nk++] = p;
-        if ((p = kill_pidfile(run, pfile, "BarPanel")) > 0)       killed[nk++] = p;
-        unlink(bdpath);
-        unlink(ppath);
-        const char *env_dir = g_getenv("BSPWM_EWW_DIR");
-        char *eww_dir = (env_dir && *env_dir) ? g_strdup(env_dir)
-                                              : mira_config_path("eww");
-        const char *argv[] = {"eww", "-c", eww_dir, "close", "volume", "music", NULL};
-        g_spawn_sync(NULL, (char **)argv, NULL,
-                     G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
-                     NULL, NULL, NULL, NULL, NULL, NULL);
-        g_free(eww_dir);
-    }
-    g_free(ppath);
-    g_free(bdpath);
 
     /* Wait briefly for killed grab-holding popups to exit so their X11 grab
      * is released before the caller maps its own popup. */
