@@ -6,6 +6,8 @@
 (() => {
   "use strict";
 
+  const ASSET_V = "93";
+
   const THEMES = {
     mira: {
       name: "Mira",
@@ -13,8 +15,8 @@
       bar: "mira",
       bg: "#08090d",
       walls: [
-        { id: "mira-01", src: "./assets/walls/mira-01.webp", thumb: "./assets/walls/thumbs/mira-01.webp?v=45", name: "Obsidian Rain Alley", effect: "Rain & puddle splashes" },
-        { id: "mira-02", src: "./assets/walls/mira-02.webp", thumb: "./assets/walls/thumbs/mira-02.webp?v=45", name: "Monolith Reflecting Atrium", effect: "Skylight drizzle & canal ripples" },
+        { id: "mira-01", src: "./assets/walls/mira-01.webp?v=45", thumb: "./assets/walls/thumbs/mira-01.webp?v=45", name: "Obsidian Rain Alley", effect: "Rain & puddle splashes" },
+        { id: "mira-02", src: "./assets/walls/mira-02.webp?v=45", thumb: "./assets/walls/thumbs/mira-02.webp?v=45", name: "Monolith Reflecting Atrium", effect: "Skylight drizzle & canal ripples" },
       ],
     },
     matcha: {
@@ -23,8 +25,8 @@
       bar: "mira-islands",
       bg: "#0b120e",
       walls: [
-        { id: "matcha-01", src: "./assets/walls/matcha-01.webp", thumb: "./assets/walls/thumbs/matcha-01.webp?v=45", name: "Arashiyama Tea Veranda", effect: "Tea steam, pollen & bamboo leaves" },
-        { id: "matcha-02", src: "./assets/walls/matcha-02.webp", thumb: "./assets/walls/thumbs/matcha-02.webp?v=45", name: "Mossy Shrine Canal", effect: "Cedar sunbeams & forest fireflies" },
+        { id: "matcha-01", src: `./assets/walls/matcha-01.webp?v=${ASSET_V}`, thumb: `./assets/walls/thumbs/matcha-01.webp?v=${ASSET_V}`, name: "Sunlit Botanical Conservatory", effect: "Glasshouse sunbeams, ripples & pollen" },
+        { id: "matcha-02", src: `./assets/walls/matcha-02.webp?v=${ASSET_V}`, thumb: `./assets/walls/thumbs/matcha-02.webp?v=${ASSET_V}`, name: "Misty Terraced Tea Valley", effect: "Millrace stream, valley mist & tea leaves" },
       ],
     },
     ember: {
@@ -33,8 +35,8 @@
       bar: "mira-line",
       bg: "#100808",
       walls: [
-        { id: "ember-01", src: "./assets/walls/ember-01.webp", thumb: "./assets/walls/thumbs/ember-01.webp?v=45", name: "Crimson Harbor Pier", effect: "Harbor ripples, gulls & embers" },
-        { id: "ember-02", src: "./assets/walls/ember-02.webp", thumb: "./assets/walls/thumbs/ember-02.webp?v=45", name: "Lantern Shrine Stairway", effect: "Lantern glow & autumn maple leaves" },
+        { id: "ember-01", src: `./assets/walls/ember-01.webp?v=${ASSET_V}`, thumb: `./assets/walls/thumbs/ember-01.webp?v=${ASSET_V}`, name: "Crimson Viaduct Crossing", effect: "Crossing lamps, sea shimmer & embers" },
+        { id: "ember-02", src: `./assets/walls/ember-02.webp?v=${ASSET_V}`, thumb: `./assets/walls/thumbs/ember-02.webp?v=${ASSET_V}`, name: "Twilight Onsen Canal", effect: "Onsen steam, chochin glow & maple leaves" },
       ],
     },
     fjord: {
@@ -43,8 +45,8 @@
       bar: "mira-minimal",
       bg: "#080f18",
       walls: [
-        { id: "fjord-01", src: "./assets/walls/fjord-01.webp", thumb: "./assets/walls/thumbs/fjord-01.webp?v=45", name: "Blue-Hour Fjord Boathouse", effect: "Nordic snow & twilight ripples" },
-        { id: "fjord-02", src: "./assets/walls/fjord-02.webp", thumb: "./assets/walls/thumbs/fjord-02.webp?v=45", name: "Glacier Station Overpass", effect: "Drifting glacier snowfall" },
+        { id: "fjord-01", src: "./assets/walls/fjord-01.webp?v=45", thumb: "./assets/walls/thumbs/fjord-01.webp?v=45", name: "Blue-Hour Fjord Boathouse", effect: "Nordic snow & twilight ripples" },
+        { id: "fjord-02", src: "./assets/walls/fjord-02.webp?v=45", thumb: "./assets/walls/thumbs/fjord-02.webp?v=45", name: "Glacier Station Overpass", effect: "Drifting glacier snowfall" },
       ],
     },
     aria: {
@@ -53,8 +55,8 @@
       bar: "mira-float",
       bg: "#07080f",
       walls: [
-        { id: "aria-01", src: "./assets/walls/aria-01.webp", thumb: "./assets/walls/thumbs/aria-01.webp?v=45", name: "Aurora Rooftop Observatory", effect: "Aurora, stars & shooting stars" },
-        { id: "aria-02", src: "./assets/walls/aria-02.webp", thumb: "./assets/walls/thumbs/aria-02.webp?v=45", name: "Starlit Tidal Railway", effect: "Tidal railway aurora & starlit sea" },
+        { id: "aria-01", src: "./assets/walls/aria-01.webp?v=45", thumb: "./assets/walls/thumbs/aria-01.webp?v=45", name: "Aurora Rooftop Observatory", effect: "Aurora, stars & shooting stars" },
+        { id: "aria-02", src: "./assets/walls/aria-02.webp?v=45", thumb: "./assets/walls/thumbs/aria-02.webp?v=45", name: "Starlit Tidal Railway", effect: "Tidal railway aurora & starlit sea" },
       ],
     },
   };
@@ -568,12 +570,17 @@
     loadPainting(url) {
       const im = new Image();
       im.decoding = "async";
-      im.onload = () => {
+      im.fetchPriority = "high";
+      const commit = () => {
         this.srcImg = im;
         this.srcReady = true;
         if (this.gl) this.uploadGLTexture();
         else this.samplePainting();
-        this.render(this.lastTime || performance.now() * 0.001);
+        this.render(this.lastTime || performance.now() * 0.001, true);
+      };
+      im.onload = () => {
+        if (im.decode) im.decode().then(commit, commit);
+        else commit();
       };
       im.src = url;
     }
@@ -1029,15 +1036,27 @@ void main() {
     return [sx, 1.0, (1.0 - sx) * 0.5, 0.0];
   }
 
-  /* ---- Image & Luma Cache -------------------------------------------- */
+  /* ---- Image & Luma Cache (Off-Main-Thread Decode + Persistent SW Cache) */
   const imgCache = new Map();
+  const imgReady = new Map();
   function loadImg(src) {
     if (imgCache.has(src)) return imgCache.get(src);
     const p = new Promise((res, rej) => {
       const im = new Image();
       im.decoding = "async";
-      im.onload = () => res(im);
-      im.onerror = rej;
+      const finish = () => {
+        const done = () => {
+          imgReady.set(src, im);
+          res(im);
+        };
+        if (im.decode) im.decode().then(done, done);
+        else done();
+      };
+      im.onload = finish;
+      im.onerror = (err) => {
+        imgCache.delete(src);
+        rej(err);
+      };
       im.src = src;
     });
     imgCache.set(src, p);
@@ -1107,9 +1126,12 @@ void main() {
       this.lastDraw = 0;
       this.reqId = 0;
       this.contextLost = false;
+      this.hasFrame = false;
+      this.onFirstFrame = opts.onFirstFrame || null;
 
       this.programs = new Map();
       this.textures = new Map();
+      this.warmPromises = new Map();
       this.fboSrc = null;
       this.fboTgt = null;
       this.fboW = 0;
@@ -1356,6 +1378,53 @@ void main() {
       if (u.uScroll) gl.uniform1f(u.uScroll, this.allowDive ? this.scrollPos : 0.0);
 
       gl.drawArrays(gl.TRIANGLES, 0, 6);
+      if (targetFbo === null) this.markFrame();
+      return true;
+    }
+
+    markFrame() {
+      if (!this.hasFrame) {
+        this.hasFrame = true;
+        if (this.onFirstFrame) this.onFirstFrame();
+      }
+    }
+
+    isWallReady(wall) {
+      return !!(wall && this.gl && this.textures.has(wall.id) && this.programs.has(wall.id));
+    }
+
+    isPairReady(wallA, wallB) {
+      return this.isWallReady(wallA) && this.isWallReady(wallB) && !!(this.fboSrc && this.fboTgt && this.fboW === this.gridW && this.fboH === this.gridH);
+    }
+
+    async prepareWall(wall) {
+      if (!wall) return false;
+      if (this.isWallReady(wall)) return true;
+      if (this.warmPromises.has(wall.id)) return this.warmPromises.get(wall.id);
+      const p = (async () => {
+        let im = null;
+        try {
+          im = await loadImg(wall.src);
+        } catch {
+          return false;
+        }
+        if (this.ensureGL()) {
+          this.ensureTexture(wall, im);
+          this.ensureProgram(wall.id);
+        }
+        return true;
+      })().finally(() => {
+        this.warmPromises.delete(wall.id);
+      });
+      this.warmPromises.set(wall.id, p);
+      return p;
+    }
+
+    async preparePair(wallA, wallB) {
+      if (!wallA || !wallB) return false;
+      const [okA, okB] = await Promise.all([this.prepareWall(wallA), this.prepareWall(wallB)]);
+      if (!okA || !okB) return false;
+      if (this.gl) this.ensureFbos();
       return true;
     }
 
@@ -1370,26 +1439,17 @@ void main() {
         const dh = im.naturalHeight * k;
         this.ctx2d.imageSmoothingEnabled = false;
         this.ctx2d.drawImage(im, (w - dw) * 0.5, (h - dh) * 0.5, dw, dh);
+        this.markFrame();
       } catch {
         // ignore
       }
     }
 
     async setWall(wall, animate = true, durationMs = 460) {
-      if (!wall) return;
+      if (!wall) return false;
       const myReq = ++this.reqId;
-      let im = null;
-      try {
-        im = await loadImg(wall.src);
-      } catch {
-        return;
-      }
-      if (myReq !== this.reqId) return;
-
-      if (this.ensureGL()) {
-        this.ensureTexture(wall, im);
-        this.ensureProgram(wall.id);
-      }
+      const ok = await this.prepareWall(wall);
+      if (!ok || myReq !== this.reqId) return false;
 
       const canTrans =
         animate &&
@@ -1401,6 +1461,7 @@ void main() {
         !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
       if (canTrans) {
+        this.ensureFbos();
         this.prevWall = this.curWall;
         this.curWall = wall;
         this.transStart = performance.now();
@@ -1417,62 +1478,68 @@ void main() {
 
       if (this.gl) {
         this.render(performance.now(), true);
+        if (canTrans) this.transStart = performance.now();
       } else {
-        this.drawFallback2D(wall);
+        await this.drawFallback2D(wall);
       }
+      return true;
     }
 
     async scrubPair(wallA, wallB, progress) {
-      if (!wallA || !wallB) return;
+      if (!wallA || !wallB) return false;
+      const clamped = clamp01(progress);
+      // Zero-latency synchronous fast path when both shaders & textures are already GPU-resident!
+      if (this.isPairReady(wallA, wallB)) {
+        this.reqId++;
+        this.prevWall = wallA;
+        this.curWall = wallB;
+        this.transActive = false;
+        this.scrubProgress = clamped;
+        this.lastDraw = 0;
+        this.render(performance.now(), true);
+        return true;
+      }
       const myReq = ++this.reqId;
-      let imA = null;
-      let imB = null;
-      try {
-        [imA, imB] = await Promise.all([loadImg(wallA.src), loadImg(wallB.src)]);
-      } catch {
-        return;
-      }
-      if (myReq !== this.reqId) return;
-      if (this.ensureGL()) {
-        this.ensureTexture(wallA, imA);
-        this.ensureTexture(wallB, imB);
-        this.ensureProgram(wallA.id);
-        this.ensureProgram(wallB.id);
-      }
+      const ok = await this.preparePair(wallA, wallB);
+      if (!ok || myReq !== this.reqId) return false;
       this.prevWall = wallA;
       this.curWall = wallB;
       this.transActive = false;
-      this.scrubProgress = clamp01(progress);
+      this.scrubProgress = clamped;
       this.lastDraw = 0;
       if (this.gl) this.render(performance.now(), true);
-      else this.drawFallback2D(progress < 0.5 ? wallA : wallB);
+      else await this.drawFallback2D(clamped < 0.5 ? wallA : wallB);
+      return true;
     }
 
-    async animatePair(wallA, wallB, durationMs = 680, fromProgress = 0) {
-      if (!wallA || !wallB) return;
-      const myReq = ++this.reqId;
-      let imA = null;
-      let imB = null;
-      try {
-        [imA, imB] = await Promise.all([loadImg(wallA.src), loadImg(wallB.src)]);
-      } catch {
-        return;
-      }
-      if (myReq !== this.reqId) return;
-      if (this.ensureGL()) {
-        this.ensureTexture(wallA, imA);
-        this.ensureTexture(wallB, imB);
-        this.ensureProgram(wallA.id);
-        this.ensureProgram(wallB.id);
-      }
+    startPreparedPair(wallA, wallB, durationMs = 680, fromProgress = 0) {
+      if (!wallA || !wallB) return false;
+      this.reqId++;
       this.prevWall = wallA;
       this.curWall = wallB;
       this.scrubProgress = null;
-      this.transStart = performance.now() - clamp01(fromProgress) * durationMs;
       this.transDur = durationMs;
       this.transActive = true;
       this.lastDraw = 0;
-      if (this.gl) this.render(performance.now(), true);
+      const p0 = clamp01(fromProgress);
+      const now0 = performance.now();
+      this.transStart = now0 - p0 * durationMs;
+      if (this.gl) {
+        // Prime 1 frame synchronously so GPU pipeline is hot & canvas is painted before clock starts!
+        this.render(now0, true);
+        this.transStart = performance.now() - p0 * durationMs;
+      } else {
+        this.drawFallback2D(p0 < 0.5 ? wallA : wallB);
+      }
+      return true;
+    }
+
+    async animatePair(wallA, wallB, durationMs = 680, fromProgress = 0) {
+      if (!wallA || !wallB) return false;
+      const myReq = ++this.reqId;
+      const ok = await this.preparePair(wallA, wallB);
+      if (!ok || myReq !== this.reqId) return false;
+      return this.startPreparedPair(wallA, wallB, durationMs, fromProgress);
     }
 
     render(nowMs, force = false) {
@@ -1534,6 +1601,7 @@ void main() {
             gl.uniform1f(u.uLumaSpan, tgtEntry ? tgtEntry.lumaSpan : 0.74);
 
             gl.drawArrays(gl.TRIANGLES, 0, 6);
+            this.markFrame();
             return;
           }
         }
@@ -1557,9 +1625,22 @@ void main() {
   const fieldCanvas = document.getElementById("field-canvas");
   const wallCanvas = document.getElementById("wall-canvas");
   const tpCanvas = document.getElementById("tp-canvas");
+  const tpStage = document.getElementById("tp-stage");
   const matrix = new UnderwaterPixelMotion(fieldCanvas);
-  const wallEngine = new LiveWallEngine(wallCanvas, { cellPx: 3, idleFps: 15, allowDive: true, lazy: true });
-  const tpEngine = new LiveWallEngine(tpCanvas, { cellPx: 2, idleFps: 15, allowDive: false, lazy: true });
+  const wallEngine = new LiveWallEngine(wallCanvas, {
+    cellPx: 3,
+    idleFps: 15,
+    allowDive: true,
+    lazy: true,
+    onFirstFrame: () => document.body.classList.add("wall-ready"),
+  });
+  const tpEngine = new LiveWallEngine(tpCanvas, {
+    cellPx: 2,
+    idleFps: 15,
+    allowDive: false,
+    lazy: true,
+    onFirstFrame: () => { if (tpStage) tpStage.classList.add("is-ready"); },
+  });
   wallEngine.resize(window.innerWidth, window.innerHeight);
 
   const siteNav = document.getElementById("site-nav");
@@ -1597,7 +1678,7 @@ void main() {
         el.tabIndex = on ? 0 : -1;
       }
     });
-    if (stageBar) drawBar(stageBar, `./assets/bars/${barKey}.webp`);
+    if (stageBar) drawBar(stageBar, `./assets/bars/${barKey}.webp?v=${ASSET_V}`);
   }
 
   // Pop the old Polybar out, then pop the new one in.
@@ -1638,6 +1719,7 @@ void main() {
     if (on) {
       wallEngine.resize(window.innerWidth, window.innerHeight);
       wallEngine.lastDraw = 0;
+      if (wallEngine.hasFrame) document.body.classList.add("wall-ready");
     }
     syncLivePill();
   }
@@ -1978,10 +2060,11 @@ void main() {
       if (scrollDirty) syncScrollState();
       if (activeOv === "themes") {
         tpEngine.render(now);
-      } else if (state.wallMode) {
+      } else if (state.wallMode && wallEngine.hasFrame) {
         wallEngine.render(now);
       } else {
         matrix.render(now * 0.001);
+        if (state.wallMode) wallEngine.render(now);
       }
     }
     if (!reducedMotion) requestAnimationFrame(frame);
@@ -2021,7 +2104,8 @@ void main() {
     return cap ? cap.textContent.trim() : "";
   };
 
-  function selectShot(i, focus = false) {
+  let shotReqId = 0;
+  async function selectShot(i, focus = false) {
     const n = stageViews.length;
     if (!n || !stageShot || !stageMonitor) return;
     const idx = ((i % n) + n) % n;
@@ -2035,18 +2119,39 @@ void main() {
     const btn = stageViews[idx];
     if (focus) btn.focus();
     stageShot.alt = viewCaption(btn);
-    if (stageShot.getAttribute("src") === btn.dataset.src) return;
-    stageMonitor.classList.add("is-loading");
-    const done = () => {
-      stageMonitor.dataset.fit = btn.dataset.fit || "top";
-      stageMonitor.classList.remove("is-loading");
-    };
-    stageShot.onload = done;
-    stageShot.onerror = done;
-    stageShot.src = btn.dataset.src;
+    const nextSrc = btn.dataset.src;
+    if (stageShot.getAttribute("src") === nextSrc) return;
+
+    const myReq = ++shotReqId;
+    const nextFit = btn.dataset.fit || "top";
+    // Keep current screenshot visible (ZERO black flash!) while off-DOM decoding next image.
+    const alreadyReady = imgReady.has(nextSrc);
+    let dimTimer = 0;
+    if (!alreadyReady) {
+      dimTimer = setTimeout(() => {
+        if (myReq === shotReqId) stageMonitor.classList.add("is-loading");
+      }, 90);
+    }
+    try {
+      await loadImg(nextSrc);
+    } catch {
+      // fall through and let <img> handle fallback
+    }
+    clearTimeout(dimTimer);
+    if (myReq !== shotReqId) return;
+    stageMonitor.dataset.fit = nextFit;
+    stageShot.src = nextSrc;
+    stageMonitor.classList.remove("is-loading");
   }
 
-  stageViews.forEach((b, k) => b.addEventListener("click", () => selectShot(k)));
+  stageViews.forEach((b, k) => {
+    b.addEventListener("click", () => selectShot(k));
+    const warmShot = () => {
+      if (b.dataset.src && !saveDataMode()) loadImg(b.dataset.src).catch(() => {});
+    };
+    b.addEventListener("pointerenter", warmShot, { passive: true });
+    b.addEventListener("focus", warmShot, { passive: true });
+  });
   if (stageTabs) {
     stageTabs.addEventListener("keydown", (e) => {
       const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
@@ -2091,7 +2196,7 @@ void main() {
   function inspectBar() {
     const btn = document.querySelector(`.bsw[data-pick-bar="${state.bar}"]`);
     const name = btn ? btn.textContent.trim() : "Polybar";
-    openLightbox(`./assets/bars/strip/${state.bar}.webp`, `${name} Polybar layout`, "bar");
+    openLightbox(`./assets/bars/strip/${state.bar}.webp?v=${ASSET_V}`, `${name} Polybar layout`, "bar");
   }
   const barInspect = document.getElementById("bar-inspect");
   if (barInspect) {
@@ -2104,7 +2209,19 @@ void main() {
   /* ---- Live Shader Lab: one rail = five theme stops + halftone scrub --
    * Rail value v runs 0..500. Stop i sits at v = 100·i; the stretch from
    * 100·i to 100·(i+1) is the luma-halftone from theme i to theme i+1, and
-   * the last stretch wraps Aria → Mira (v = 500 is Mira again). */
+   * the last stretch wraps Aria → Mira (v = 500 is Mira again).
+   *
+   * Elegant Zero-Waste Warming Strategy (NEVER bulk-downloads all 10 on load):
+   *   1. Viewport intent: IntersectionObserver on #halftone warms ONLY the
+   *      active pair [a, b] (image decode + WebGL shader compile + texImage2D
+   *      + FBOs) during browser idle time when the visitor approaches the Lab.
+   *   2. Interaction intent: hovering/focusing a stop, Play/45%, or [W]/[T]
+   *      warms just that target wallpaper ahead of click.
+   *   3. Sliding-window lookahead: after segment i→i+1 finishes, quietly warms
+   *      ONLY the next single stop (i+2) so consecutive Plays stay 0ms instant.
+   *   4. Prepare-before-clock: Play/45% always await preparePair(a, b) BEFORE
+   *      starting the rail clock or revealing #wall-canvas -> 0 black flash,
+   *      0 slider desync, locked 60/120 FPS from frame 0. */
   const LAB_MAX = THEME_ORDER.length * 100;
   const LAB_HOLD = 45;
   const LAB_PLAY_MS = 760;
@@ -2112,9 +2229,36 @@ void main() {
   const labTrack = document.getElementById("lab-track");
   const labPct = document.getElementById("scrub-readout");
   const labPlayBtn = document.getElementById("btn-scrub-play");
+  const labHoldBtn = document.getElementById("btn-scrub-hold");
   const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
   let labPos = 0;
   let labRaf = 0;
+  let labPlaySeq = 0;
+
+  const saveDataMode = () => !!(navigator.connection && navigator.connection.saveData);
+  const idleQueue = new Set();
+  const runIdle = (fn) => {
+    if ("requestIdleCallback" in window) {
+      window.requestIdleCallback(fn, { timeout: 900 });
+    } else {
+      setTimeout(fn, 120);
+    }
+  };
+  function scheduleIdleWarm(wall, engine = wallEngine) {
+    if (!wall || saveDataMode() || engine.isWallReady(wall)) return;
+    const key = `${engine === tpEngine ? "tp" : "bg"}:${wall.id}`;
+    if (idleQueue.has(key)) return;
+    idleQueue.add(key);
+    runIdle(() => {
+      idleQueue.delete(key);
+      if (!engine.isWallReady(wall)) engine.prepareWall(wall).catch(() => {});
+    });
+  }
+  function scheduleIdleWarmPair(seg) {
+    const [a, b] = labPair(seg);
+    scheduleIdleWarm(a, wallEngine);
+    scheduleIdleWarm(b, wallEngine);
+  }
 
   const labSeg = (v) => Math.min(THEME_ORDER.length - 1, Math.floor(v / 100));
   const findWall = (id) => ALL_WALLS.find((w) => w.id === id) || ALL_WALLS[0];
@@ -2141,9 +2285,13 @@ void main() {
   }
 
   function stopLabAnim() {
+    labPlaySeq++;
     cancelAnimationFrame(labRaf);
     labRaf = 0;
-    if (labPlayBtn) labPlayBtn.classList.remove("is-on");
+    if (labPlayBtn) {
+      labPlayBtn.classList.remove("is-on", "is-loading");
+    }
+    if (labHoldBtn) labHoldBtn.classList.remove("is-loading");
   }
 
   // Shows the wallpaper pair for rail value v on the fullscreen canvas.
@@ -2165,6 +2313,8 @@ void main() {
     const clamped = Math.max(0, Math.min(LAB_MAX, Math.round(v)));
     paintLab(clamped);
     showLabAt(clamped);
+    const seg = labSeg(clamped);
+    scheduleIdleWarm(labPair((seg + 1) % LAB_PAIRS.length)[1]);
   }
 
   // Eases the playhead (and optionally the halftone) from where it is to `to`.
@@ -2187,16 +2337,17 @@ void main() {
     labRaf = requestAnimationFrame(step);
   }
 
-  // Theme picked elsewhere (rail stop, T picker, W picker): glide to its stop.
+  // Theme picked elsewhere (rail stop, T picker, W picker): glide to its stop & warm its next neighbor.
   function syncLabToTheme(themeKey) {
     const idx = THEME_ORDER.indexOf(themeKey);
     if (idx < 0) return;
+    scheduleIdleWarm(labPair(idx)[1]);
     if (labPos === idx * 100 || (idx === 0 && labPos >= LAB_MAX)) return;
     tweenLab(idx * 100, 460, false);
   }
 
-  // Play: run the halftone to the next stop (resuming from a held position).
-  function playLab() {
+  // Play: prepare BOTH textures + GLSL shaders + FBOs BEFORE starting clock -> zero stutter, zero black flash!
+  async function playLab() {
     const v = labPos >= LAB_MAX ? 0 : labPos;
     const seg = labSeg(v);
     const p0 = (v - seg * 100) / 100;
@@ -2207,16 +2358,38 @@ void main() {
       return;
     }
     stopLabAnim();
+    const mySeq = ++labPlaySeq;
     const [a, b] = labPair(seg);
+    let loadTimer = 0;
+    if (labPlayBtn) {
+      labPlayBtn.classList.add("is-on");
+      if (!wallEngine.isPairReady(a, b)) {
+        loadTimer = setTimeout(() => {
+          if (mySeq === labPlaySeq) labPlayBtn.classList.add("is-loading");
+        }, 90);
+      }
+    }
+
+    const ready = await wallEngine.preparePair(a, b);
+    clearTimeout(loadTimer);
+    if (mySeq !== labPlaySeq) return;
+    if (labPlayBtn) labPlayBtn.classList.remove("is-loading");
+    if (!ready) {
+      stopLabAnim();
+      return;
+    }
+
     state.wallId = b.id;
     setThemeAttr(p0 < 0.5 ? a.theme : b.theme);
-    enterWallMode(true);
     wallEngine.scrollTarget = 0;
     lastScrubScrollY = -1;
-    wallEngine.animatePair(a, b, LAB_PLAY_MS, p0);
-    if (labPlayBtn) labPlayBtn.classList.add("is-on");
-    const t0 = performance.now() - p0 * LAB_PLAY_MS;
+    wallEngine.resize(window.innerWidth, window.innerHeight);
+    wallEngine.startPreparedPair(a, b, LAB_PLAY_MS, p0);
+    enterWallMode(true);
+
+    const t0 = wallEngine.transStart;
     const step = (now) => {
+      if (mySeq !== labPlaySeq) return;
       const p = clamp01((now - t0) / LAB_PLAY_MS);
       if (p >= 0.5 && state.theme !== b.theme) setThemeAttr(b.theme);
       if (p < 1) {
@@ -2225,21 +2398,95 @@ void main() {
       } else {
         stopLabAnim();
         paintLab(to >= LAB_MAX ? 0 : to);
+        // Sliding-window lookahead: warm ONLY the next single theme wallpaper in idle time!
+        const nextSeg = (seg + 1) % LAB_PAIRS.length;
+        scheduleIdleWarm(labPair(nextSeg)[1]);
       }
     };
     labRaf = requestAnimationFrame(step);
   }
 
-  // 45%: freeze the stretch you are in at its most interleaved frame.
-  function holdLab() {
-    tweenLab(labSeg(labPos) * 100 + LAB_HOLD, 420, true);
+  // 45%: prepare pair first, then glide smoothly to the most interleaved frame (zero black flash).
+  async function holdLab() {
+    const seg = labSeg(labPos);
+    const targetV = seg * 100 + LAB_HOLD;
+    const [a, b] = labPair(seg);
+    stopLabAnim();
+    const mySeq = ++labPlaySeq;
+    let loadTimer = 0;
+    if (labHoldBtn && !wallEngine.isPairReady(a, b)) {
+      loadTimer = setTimeout(() => {
+        if (mySeq === labPlaySeq) labHoldBtn.classList.add("is-loading");
+      }, 90);
+    }
+    const ready = await wallEngine.preparePair(a, b);
+    clearTimeout(loadTimer);
+    if (mySeq !== labPlaySeq) return;
+    if (labHoldBtn) labHoldBtn.classList.remove("is-loading");
+    if (!ready) return;
+    tweenLab(targetV, 420, true);
+    scheduleIdleWarm(labPair((seg + 1) % LAB_PAIRS.length)[1]);
   }
 
   if (labRange) labRange.addEventListener("input", () => scrubLabTo(Number(labRange.value)));
   // While a transition plays the key reads Stop; pressing it freezes the rail where it is.
-  onEl("btn-scrub-play", "click", () => (labRaf ? scrubLabTo(labPos) : playLab()));
+  onEl("btn-scrub-play", "click", () => (labRaf || (labPlayBtn && labPlayBtn.classList.contains("is-on")) ? scrubLabTo(labPos) : playLab()));
   onEl("btn-scrub-hold", "click", holdLab);
   paintLab(0, false);
+
+  /* ---- Smart Zero-Waste Intent Warming (Viewport + Hover/Focus) ------ */
+  const halftoneSec = document.getElementById("halftone");
+  if (halftoneSec && "IntersectionObserver" in window) {
+    const labObs = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        scheduleIdleWarmPair(labSeg(labPos));
+      }
+    }, { rootMargin: "320px 0px" });
+    labObs.observe(halftoneSec);
+  }
+
+  // Hover/focus intent on Lab controls warms only the active pair or hovered stop
+  [labPlayBtn, labHoldBtn, labRange].forEach((el) => {
+    if (!el) return;
+    const warmCur = () => scheduleIdleWarmPair(labSeg(labPos));
+    el.addEventListener("pointerenter", warmCur, { passive: true });
+    el.addEventListener("focus", warmCur, { passive: true });
+    el.addEventListener("touchstart", warmCur, { passive: true });
+  });
+  document.querySelectorAll("[data-pick-theme]").forEach((btn) => {
+    const warmStop = () => {
+      const w = ALL_WALLS.find((x) => x.theme === btn.dataset.pickTheme);
+      if (w) scheduleIdleWarm(w, wallEngine);
+    };
+    btn.addEventListener("pointerenter", warmStop, { passive: true });
+    btn.addEventListener("focus", warmStop, { passive: true });
+  });
+  document.querySelectorAll("[data-pick-bar]").forEach((btn) => {
+    const warmBar = () => {
+      if (!saveDataMode() && btn.dataset.pickBar) {
+        loadImg(`./assets/bars/${btn.dataset.pickBar}.webp?v=${ASSET_V}`).catch(() => {});
+      }
+    };
+    btn.addEventListener("pointerenter", warmBar, { passive: true });
+    btn.addEventListener("focus", warmBar, { passive: true });
+  });
+  ["nav-open-walls", "hero-open-walls", "btn-open-walls", "drawer-open-walls"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const warmW = () => scheduleIdleWarm(findWall(state.wallId), wallEngine);
+    el.addEventListener("pointerenter", warmW, { passive: true });
+    el.addEventListener("focus", warmW, { passive: true });
+  });
+  ["nav-open-themes", "hero-open-themes", "btn-open-themes", "drawer-open-themes"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const warmT = () => {
+      const t = THEMES[state.theme];
+      if (t && t.walls[0]) scheduleIdleWarm(findWall(t.walls[0].id), tpEngine);
+    };
+    el.addEventListener("pointerenter", warmT, { passive: true });
+    el.addEventListener("focus", warmT, { passive: true });
+  });
 
   /* ---- Install: one sequence on a rail; click a row to copy it --------
    * The rail fills in accent down to the furthest step copied so far, so a
@@ -2438,7 +2685,7 @@ void main() {
     const wall = ALL_WALLS.find((w) => w.id === t.walls[0].id);
     resizeTpCanvas();
     if (wall) tpEngine.setWall(wall, animate, 420);
-    tpBar.src = `./assets/bars/${t.bar}.webp`;
+    tpBar.src = `./assets/bars/${t.bar}.webp?v=${ASSET_V}`;
     tpName.textContent = t.name;
     tpSub.textContent = t.sub;
     tpList.querySelectorAll(".sc-row").forEach((el, idx) => {
@@ -2450,7 +2697,8 @@ void main() {
       }
     });
     const nextK = THEME_ORDER[(tpIdx + 1) % THEME_ORDER.length];
-    loadImg(THEMES[nextK].walls[0].src).catch(() => {});
+    const nextW = ALL_WALLS.find((w) => w.id === THEMES[nextK].walls[0].id);
+    if (nextW) scheduleIdleWarm(nextW, tpEngine);
   }
 
   function applyTheme() {
@@ -2797,6 +3045,12 @@ void main() {
   window.addEventListener("load", () => {
     measureSlides();
     syncScrollState();
+    if (
+      "serviceWorker" in navigator &&
+      (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")
+    ) {
+      navigator.serviceWorker.register(`./sw.js?v=${ASSET_V}`).catch(() => {});
+    }
   }, { passive: true });
   syncScrollState();
   matrix.depthPos = matrix.scrollNorm;

@@ -8,13 +8,14 @@
   <meta name="theme-color" content="#08090d">
   <meta property="og:title" content="Mira · BSPWM Desktop for Debian 13">
   <meta property="og:description" content="200 MiB idle, zero-crate Rust and GTK 3, five themes and Polybar layouts, and 3px Bayer GLSL live wallpapers.">
-  <meta property="og:image" content="./assets/screenshots/overview.webp">
+  <meta property="og:image" content="./assets/screenshots/overview.webp?v=93">
   <meta property="og:type" content="website">
-  <link rel="icon" type="image/svg+xml" href="./assets/logo/mira-mark.svg?v=81">
+  <link rel="icon" type="image/svg+xml" href="./assets/logo/mira-mark.svg?v=89">
+  <link rel="preload" as="image" href="./assets/bg/mira-underwater-scene.webp" fetchpriority="high">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./style.css?v=81">
+  <link rel="stylesheet" href="./style.css?v=93">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -43,8 +44,9 @@
         <a href="#desktop" data-sec="desktop">Desktop</a>
         <a href="#halftone" data-sec="halftone">Shaders</a>
         <a href="#install" data-sec="install">Install</a>
-        <button type="button" class="nav-link-btn" id="nav-open-themes">Themes</button>
-        <button type="button" class="nav-link-btn" id="nav-open-walls">Wallpapers</button>
+        <span class="nav-sep" aria-hidden="true"></span>
+        <button type="button" class="nav-link-btn" id="nav-open-themes">Themes <kbd class="nav-key">T</kbd></button>
+        <button type="button" class="nav-link-btn" id="nav-open-walls">Wallpapers <kbd class="nav-key">W</kbd></button>
       </nav>
 
       <div class="nav-zone nav-actions">
@@ -129,11 +131,11 @@
 
         <div class="stage">
           <div class="stage-list" id="stage-tabs" role="tablist" aria-orientation="vertical" aria-label="Desktop views">
-            <button type="button" class="view is-active" role="tab" aria-selected="true" aria-controls="stage-monitor" data-shot="0" data-src="./assets/screenshots/overview.webp" data-fit="top">
+            <button type="button" class="view is-active" role="tab" aria-selected="true" aria-controls="stage-monitor" data-shot="0" data-src="./assets/screenshots/overview.webp?v=93" data-fit="top">
               <span class="tnum">01</span><span class="view-name">Overview</span>
               <span class="view-cap">Tiled BSPWM desktop, Rofi launcher, notification center, and wallpaper gallery.</span>
             </button>
-            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="1" data-src="./assets/screenshots/scroll-layout.webp" data-fit="top">
+            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="1" data-src="./assets/screenshots/scroll-layout.webp?v=93" data-fit="top">
               <span class="tnum">02</span><span class="view-name">Scrolling</span>
               <span class="view-cap">Hyprland-style horizontal scrolling columns managed by misa-scroll.</span>
             </button>
@@ -141,7 +143,7 @@
               <span class="tnum">03</span><span class="view-name">Launcher</span>
               <span class="view-cap">Rofi application launcher anchored beneath Polybar, sorted by usage.</span>
             </button>
-            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="3" data-src="./assets/screenshots/notification-center.webp" data-fit="right">
+            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="3" data-src="./assets/screenshots/notification-center.webp?v=93" data-fit="right">
               <span class="tnum">04</span><span class="view-name">Notifications</span>
               <span class="view-cap">Native C/GTK3 NotifPanel with Do Not Disturb toggle, toasts, and OSD.</span>
             </button>
@@ -149,18 +151,18 @@
               <span class="tnum">05</span><span class="view-name">Clipboard</span>
               <span class="view-cap">Text and PNG clipboard history powered by misa-clip and ClipPanel.</span>
             </button>
-            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="5" data-src="./assets/screenshots/wallpaper-picker.webp" data-fit="top">
+            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="5" data-src="./assets/screenshots/wallpaper-picker.webp?v=93" data-fit="top">
               <span class="tnum">06</span><span class="view-name">WallSelect</span>
               <span class="view-cap">CardPicker gallery mode powering WallSelect over a live 3px Bayer shader wallpaper.</span>
             </button>
-            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="6" data-src="./assets/screenshots/theme-picker.webp" data-fit="top">
+            <button type="button" class="view" role="tab" aria-selected="false" aria-controls="stage-monitor" tabindex="-1" data-shot="6" data-src="./assets/screenshots/theme-picker.webp?v=93" data-fit="top">
               <span class="tnum">07</span><span class="view-name">RiceSelector</span>
               <span class="view-cap">CardPicker showcase mode powering RiceSelector across all five themes.</span>
             </button>
           </div>
           <div class="stage-view">
             <div class="stage-monitor" id="stage-monitor" role="tabpanel" data-fit="top">
-              <img class="stage-shot" id="stage-shot" src="./assets/screenshots/overview.webp" alt="Tiled BSPWM desktop, Rofi launcher, notification center, and wallpaper gallery.">
+              <img class="stage-shot" id="stage-shot" src="./assets/screenshots/overview.webp?v=93" decoding="async" alt="Tiled BSPWM desktop, Rofi launcher, notification center, and wallpaper gallery.">
             </div>
             <div class="stage-keys">
               <button type="button" class="kbtn" id="stage-zoom" aria-label="View screenshot fullscreen">
@@ -173,7 +175,7 @@
 
         <div class="bar-live">
           <div class="bar-strip-frame" id="bar-inspect" role="button" tabindex="0" aria-label="Inspect the Polybar layout">
-            <img class="bar-strip-img" id="stage-bar" src="./assets/bars/mira-minimal.webp" alt="Active Polybar layout">
+            <img class="bar-strip-img" id="stage-bar" src="./assets/bars/mira-minimal.webp?v=93" alt="Active Polybar layout">
           </div>
           <div class="bar-switcher" role="group" aria-label="Switch Polybar layout">
             <button type="button" class="bsw" data-pick-bar="mira">
@@ -219,10 +221,10 @@
                 <span class="tnum">01</span><span class="lab-name">Mira</span><span class="lab-wall">Obsidian Rain Alley</span>
               </button>
               <button type="button" class="lab-stop" data-pick-theme="matcha">
-                <span class="tnum">02</span><span class="lab-name">Matcha</span><span class="lab-wall">Arashiyama Tea Veranda</span>
+                <span class="tnum">02</span><span class="lab-name">Matcha</span><span class="lab-wall">Sunlit Botanical Conservatory</span>
               </button>
               <button type="button" class="lab-stop" data-pick-theme="ember">
-                <span class="tnum">03</span><span class="lab-name">Ember</span><span class="lab-wall">Crimson Harbor Pier</span>
+                <span class="tnum">03</span><span class="lab-name">Ember</span><span class="lab-wall">Crimson Viaduct Crossing</span>
               </button>
               <button type="button" class="lab-stop" data-pick-theme="fjord">
                 <span class="tnum">04</span><span class="lab-name">Fjord</span><span class="lab-wall">Blue-Hour Fjord Boathouse</span>
@@ -273,7 +275,6 @@
               <h2>Install Mira.<br><span class="dim">Debian 13 · X11 &amp; SDDM.</span></h2>
               <p class="lede">
                 Everything else comes from Debian. Install
-                <a href="https://github.com/elkowar/eww" target="_blank" rel="noopener noreferrer">Eww</a>,
                 <a href="https://ghostty.org" target="_blank" rel="noopener noreferrer">Ghostty</a> and
                 <a href="https://www.nerdfonts.com" target="_blank" rel="noopener noreferrer">JetBrainsMono Nerd Font</a> separately;
                 <a href="https://github.com/sxyazi/yazi" target="_blank" rel="noopener noreferrer">yazi</a> is optional.
@@ -378,21 +379,24 @@
   <div class="mira-ov ov-themes-sheet" id="ov-themes" hidden role="dialog" aria-modal="true" aria-label="RiceSelector theme picker">
     <div class="ov-back" data-close></div>
     <div class="showcase">
-      <div class="showcase-mob-head">
-        <span class="showcase-mob-title">Themes</span>
-        <button type="button" class="ov-touch-close" data-close aria-label="Close theme picker">Esc</button>
-      </div>
       <div class="showcase-list" id="tp-list" role="listbox"></div>
       <div class="showcase-stage" id="tp-stage">
         <canvas class="showcase-canvas" id="tp-canvas" aria-label="Live theme wallpaper preview"></canvas>
-        <img class="showcase-bar" id="tp-bar" src="./assets/bars/mira.webp" alt="Bar preview">
+        <img class="showcase-bar" id="tp-bar" src="./assets/bars/mira.webp?v=93" alt="Bar preview">
         <div class="showcase-cap">
           <strong id="tp-name">Mira</strong>
           <span id="tp-sub">Monochrome obsidian · acid yellow · mira</span>
         </div>
       </div>
       <div class="showcase-mob-foot">
-        <button type="button" class="ov-touch-apply showcase-mob-apply" id="tp-apply-btn">Apply theme</button>
+        <button type="button" class="kbtn" id="tp-apply-btn">
+          <span class="kcap">Enter</span>
+          <span class="klbl">Apply</span>
+        </button>
+        <button type="button" class="kbtn" data-close aria-label="Close theme picker">
+          <span class="kcap">Esc</span>
+          <span class="klbl">Back</span>
+        </button>
       </div>
     </div>
     <div class="ov-keys ov-corner">
@@ -434,7 +438,7 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-  <script src="./wall-shaders.js?v=81" defer></script>
-  <script src="./app.js?v=81" defer></script>
+  <script src="./wall-shaders.js?v=93" defer></script>
+  <script src="./app.js?v=93" defer></script>
 </body>
 </html>

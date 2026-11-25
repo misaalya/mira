@@ -49,10 +49,12 @@ repository.
 - **Five themes and five Polybar layouts.** Switch between `Mira`, `Matcha`, `Ember`, `Fjord`, and
   `Aria` (`RiceSelector`) or mix any of the five Polybar geometries (`mira`, `mira-float`,
   `mira-islands`, `mira-line`, `mira-minimal`) via `BarSelector`.
-- **Live GLX shader wallpapers (`misa-wall`).** Renders 3px ordered-Bayer GLSL fragment shaders at
-  1:1 cell-FBO resolution with adaptive coverage FPS (pauses when covered by windows), exposed-rect
-  partial presentation, and live-to-live Luma-Halftone Develop transitions. Also supports static
-  images with `swww`-style transitions.
+- **Live animated shader wallpapers (`misa-wall`).** Bakes 3px ordered-Bayer GLSL fragment shaders
+  once offscreen into content-hashed planar-delta `.mwa` (LZ4 + `16×9` tile dirty masks) loops,
+  then plays them in a zero-OpenGL / zero-GdkPixbuf daemon (~1.8 MiB PSS active, ~0.75 MiB paused)
+  using hardware `XRender` nearest-neighbor 3× scaling from a `640×360` MIT-SHM buffer, adaptive
+  per-monitor occlusion FPS, and AVX2 Luma-Halftone Develop transitions. Also supports static
+  images with 0 MiB resident RAM.
 - **Scrolling layout (`Scroll`).** Per-desktop horizontal scrolling columns over the BSPWM Unix
   socket, alongside standard BSPWM tiling layouts (`Layout`).
 - **Full-screen pickers (`CardPicker`).** GPU-dithered 1:1 thumbnails for the wallpaper gallery
@@ -67,7 +69,8 @@ repository.
   picker.
 - **Wi-Fi and Bluetooth panels.** Network list, connection details, and Wi-Fi QR sharing
   (`WifiPanel`, `BluetoothPanel`).
-- **Media & Sound.** Now-playing pill (`MediaPillUI`) plus Eww music and volume popups.
+- **Media & Sound.** Now-playing pill (`MediaPillUI`) plus native GTK 3 music (`MusicPanel`) and
+  sound (`SoundPanel`) popups (one-shot, 0 MiB idle RAM).
 - **Window switcher & backdrop.** Live-thumbnail Alt-Tab switcher (`WindowSwitch`) and popup blur/dim
   layer with passive Escape grab (`misa-backdrop`).
 - **Showcase website (`docs/`).** Static site mirroring the five themes, Polybar layouts, WebGL
@@ -78,27 +81,27 @@ crates (`std` only) and build offline; UI overlays (`misa-ui`) are written in C 
 
 ## Memory usage
 
-At idle on an empty `:0` desktop (0 windows open, live GLX shader wallpaper active in `misa-wall`,
-with `bspwm`, `sxhkd`, `picom`, `polybar`, `eww`, and all Mira daemons running), the session uses
-**~200 MiB PSS** (`200.1 MiB`, median of 5 samples via `tools/memory-bench.sh -n 5`). Using a
-static wallpaper without the live GLX daemon lowers idle usage by ~35 MiB (~165 MiB PSS).
+At idle on an empty `:0` desktop (0 windows open, animated 3px Bayer shader wallpaper active in
+`misa-wall` v3, with `bspwm`, `sxhkd`, `picom`, `polybar`, and all Mira daemons running), the
+session uses **~129 MiB PSS** (`128.6 MiB` after replacing Eww with one-shot GTK 3 `SoundPanel` &
+`MusicPanel` and upgrading `misa-wall` to zero-OpenGL `XRender` + `pread` MWA3 streaming at
+`~1.8 MiB` active / `~0.75 MiB` paused).
 
 <details>
-<summary>Per-component idle PSS breakdown (2026-11-25, median of 5 samples, 0 open windows)</summary>
+<summary>Per-component idle PSS breakdown (2026-11-25, 0 open windows)</summary>
 
 ```text
-Mira memory (PSS) on :0, 2026-11-25 14:28:57, 5 sample(s)
-theme: mira · bar: mira-float · wall: live GLX shader (wall-02.frag) · open windows: 0
+Mira memory (PSS) on :0, 2026-11-25
+theme: mira · bar: mira-float · wall: live MWA3 XRender daemon · open windows: 0
 
 component        procs  PSS (MiB)
 picom                1       39.4
-eww                  1       38.2
-misa-wall            1       34.8
 ClipPanel            1       34.6
 polybar              2       17.2
 NotifPanel           1       13.3
 WifiPanel            1       12.0
 misa-clip            1        2.6
+misa-wall            1        1.8
 MonitorWatch         2        1.3
 playerctl            1        1.3
 Scroll               1        1.3
@@ -107,7 +110,7 @@ bspwm                1        0.6
 xsettingsd           1        0.5
 sxhkd                1        0.4
 bspwmrc / helpers    8        1.2
-TOTAL                       200.1
+TOTAL                       128.6
 ```
 
 Measure it on your own machine with `./tools/memory-bench.sh -n 5`.
@@ -140,8 +143,8 @@ ordered-Bayer GLSL shader in `misa-wall`.
 | Theme | Palette & default bar | `wall-01` (live shader) | `wall-02` (live shader) |
 | --- | --- | :---: | :---: |
 | **Mira** | Monochrome obsidian · `#d9d84a` · `mira` | ![Mira wall-01: Obsidian Rain Alley](assets/screenshots/walls/mira-01.webp) | ![Mira wall-02: Monolith Reflecting Atrium](assets/screenshots/walls/mira-02.webp) |
-| **Matcha** | Mossy charcoal · `#b8cc7a` · `mira-islands` | ![Matcha wall-01: Arashiyama Tea Veranda](assets/screenshots/walls/matcha-01.webp) | ![Matcha wall-02: Mossy Shrine Canal](assets/screenshots/walls/matcha-02.webp) |
-| **Ember** | Volcanic obsidian · `#f07148` · `mira-line` | ![Ember wall-01: Crimson Harbor Pier](assets/screenshots/walls/ember-01.webp) | ![Ember wall-02: Lantern Shrine Stairway](assets/screenshots/walls/ember-02.webp) |
+| **Matcha** | Mossy charcoal · `#b8cc7a` · `mira-islands` | ![Matcha wall-01: Sunlit Botanical Conservatory](assets/screenshots/walls/matcha-01.webp) | ![Matcha wall-02: Misty Terraced Tea Valley](assets/screenshots/walls/matcha-02.webp) |
+| **Ember** | Volcanic obsidian · `#f07148` · `mira-line` | ![Ember wall-01: Crimson Viaduct Crossing](assets/screenshots/walls/ember-01.webp) | ![Ember wall-02: Twilight Onsen Canal](assets/screenshots/walls/ember-02.webp) |
 | **Fjord** | Basalt slate · `#8db7d4` · `mira-minimal` | ![Fjord wall-01: Blue-Hour Fjord Boathouse](assets/screenshots/walls/fjord-01.webp) | ![Fjord wall-02: Glacier Station Overpass](assets/screenshots/walls/fjord-02.webp) |
 | **Aria** | Midnight navy · `#5ce6b8` · `mira-float` | ![Aria wall-01: Aurora Rooftop Observatory](assets/screenshots/walls/aria-01.webp) | ![Aria wall-02: Starlit Tidal Railway](assets/screenshots/walls/aria-02.webp) |
 
@@ -192,7 +195,6 @@ Not packaged in Debian 13, install separately:
 
 | Program | Used for |
 | --- | --- |
-| [Eww](https://github.com/elkowar/eww) | Sound and music panels |
 | [Ghostty](https://ghostty.org) | Default terminal |
 | [JetBrainsMono Nerd Font](https://www.nerdfonts.com) | Bar and terminal font |
 | [yazi](https://github.com/sxyazi/yazi) | File manager and `xdg-desktop-portal` file chooser (optional) |
@@ -274,7 +276,7 @@ Edit files in this repository and run `./tools/deploy.sh` to apply them.
 src/       Native tools: misa-scroll, misa-wall, misa-clip, misa-backdrop (Rust, 0 crates),
            misa-ui (C, GTK 3 + GLX live thumbnail renderer)
 session/   BSPWM session: bspwmrc, sxhkdrc, 5 themes + 10 live wallpapers, 5 Polybar layouts,
-           Eww widgets, rofi configs, picom rules, and control scripts (bin/)
+           rofi configs, picom rules, and control scripts (bin/)
 sddm/      Qt 6 SDDM login theme (sddm/mira/) with GPU Bayer pixel shader
 docs/      Static showcase website (GitHub Pages) with live WebGL 3px Bayer shaders
 portal/    xdg-desktop-portal config with a yazi termfilechooser wrapper
@@ -286,7 +288,7 @@ tools/     setup.sh, build.sh, deploy.sh, dev-session.sh, sddm-theme.sh, memory-
 ## Development
 
 `./tools/dev-session.sh` boots a full isolated Mira session in Xephyr on `:9` with its own
-`MIRA_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `XDG_CACHE_HOME`, `BSPWM_SOCKET`, `BSPWM_EWW_DIR`, and
+`MIRA_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `XDG_CACHE_HOME`, `BSPWM_SOCKET`, and
 `dbus-run-session`, leaving the live `:0` session untouched. Set `MIRA_TEST_DISPLAY` or
 `MIRA_TEST_SCREEN` to override display or resolution.
 
