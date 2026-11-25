@@ -6,8 +6,9 @@ description = "Hyper-optimized X11 wallpaper engine with Mira's original Luma-Ha
 authors = ["Misaalya"]
 license = "GPL-3.0-only"
 
-# No crates: libX11, libXext (MIT-SHM), libXrandr, and libgdk_pixbuf-2.0 are
-# called directly via FFI, with explicit x86_64 AVX2/SSE2 SIMD.
+# No crates: libX11, libXext (MIT-SHM), libXrender (3x nearest scale), and
+# libXrandr are linked directly; libGL & libgdk_pixbuf-2.0 are loaded lazily
+# via dlopen only during baking or static image decoding.
 [dependencies]
 
 [profile.release]
