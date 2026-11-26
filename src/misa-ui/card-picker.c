@@ -31,7 +31,10 @@
  * Keys: arrows / Tab / Home / End move, Enter or click picks, Esc, right
  * click or a click on the backdrop closes, the wheel moves. Hovering selects
  * (gallery: a click selects, a click on the selected one or Enter applies).
- * The window leaves the bar uncovered (below_bar), so it never blurs.
+ * The window covers the full monitor so blur and wallpaper transitions extend
+ * seamlessly behind floating/island/minimal topbars, while Polybar / dock
+ * windows on that monitor are raised directly above CardPicker so they stay
+ * sharp. SHOWCASE and STRIPS pad their content below the bar strut.
  */
 #include "common.h"
 
@@ -1936,7 +1939,53 @@ static gboolean is_monitor_bar_window(Display *dpy, Window w, Window self,
     return matched;
 }
 
-static void gallery_raise_bars(void) {
+static gboolean is_transient_overlay(Display *dpy, Window w) {
+    gboolean overlay = FALSE;
+    XClassHint ch = {NULL, NULL};
+    if (XGetClassHint(dpy, w, &ch)) {
+        if (ch.res_class &&
+            (!strcmp(ch.res_class, "Backdrop") || !strcmp(ch.res_class, "CardPicker") ||
+             !strcmp(ch.res_class, "SoundPanel") || !strcmp(ch.res_class, "MusicPanel") ||
+             !strcmp(ch.res_class, "WifiPanel") || !strcmp(ch.res_class, "BluetoothPanel") ||
+             !strcmp(ch.res_class, "ClipPanel") || !strcmp(ch.res_class, "NotifCenter") ||
+             !strcmp(ch.res_class, "NotifToast") || !strcmp(ch.res_class, "WindowSwitch") ||
+             !strcmp(ch.res_class, "MediaPill") || !strcmp(ch.res_class, "Rofi")))
+            overlay = TRUE;
+        if (ch.res_name) XFree(ch.res_name);
+        if (ch.res_class) XFree(ch.res_class);
+    }
+    return overlay;
+}
+
+static gboolean has_other_active_overlay(Display *dpy, Window self, Rect mon) {
+    Window root_ret = None, parent_ret = None, *kids = NULL;
+    unsigned int nk = 0;
+    if (!XQueryTree(dpy, DefaultRootWindow(dpy), &root_ret, &parent_ret, &kids, &nk) || !kids)
+        return FALSE;
+    gboolean found = FALSE;
+    for (unsigned int i = 0; i < nk; i++) {
+        Window w = kids[i];
+        if (w == None || w == self) continue;
+        XWindowAttributes attr;
+        if (!XGetWindowAttributes(dpy, w, &attr)) continue;
+        if (attr.map_state != IsViewable || attr.class != InputOutput) continue;
+        if (attr.x >= mon.x + mon.w || attr.x + attr.width <= mon.x ||
+            attr.y >= mon.y + mon.h || attr.y + attr.height <= mon.y)
+            continue;
+        XClassHint ch = {NULL, NULL};
+        if (XGetClassHint(dpy, w, &ch)) {
+            if (ch.res_class && (!strcmp(ch.res_class, "Backdrop") || !strcmp(ch.res_class, "CardPicker")))
+                found = TRUE;
+            if (ch.res_name) XFree(ch.res_name);
+            if (ch.res_class) XFree(ch.res_class);
+        }
+        if (found) break;
+    }
+    XFree(kids);
+    return found;
+}
+
+static void picker_raise_bars(void) {
     if (!S.win || G.n_raised_bars > 0) return;
     GdkWindow *gw = gtk_widget_get_window(S.win);
     if (!gw) return;
@@ -1954,11 +2003,19 @@ static void gallery_raise_bars(void) {
     unsigned int nk = 0;
     if (XQueryTree(dpy, DefaultRootWindow(dpy), &root_ret, &parent_ret, &kids, &nk) && kids && nk > 0) {
         gboolean *is_bar = g_new0(gboolean, nk);
+        gboolean *is_stable = g_new0(gboolean, nk);
         int count = 0;
         for (unsigned int i = 0; i < nk; i++) {
             if (is_monitor_bar_window(dpy, kids[i], card_xwin, a_wm_type, a_dock, G.mon)) {
                 is_bar[i] = TRUE;
                 count++;
+            } else if (kids[i] != card_xwin) {
+                XWindowAttributes attr;
+                if (XGetWindowAttributes(dpy, kids[i], &attr) &&
+                    attr.map_state == IsViewable && attr.class == InputOutput &&
+                    !is_transient_overlay(dpy, kids[i])) {
+                    is_stable[i] = TRUE;
+                }
             }
         }
         if (count > 0) {
@@ -1969,10 +2026,10 @@ static void gallery_raise_bars(void) {
                 if (!is_bar[i]) continue;
                 Window above = None, below = None;
                 for (unsigned int k = i + 1; k < nk; k++) {
-                    if (!is_bar[k] && kids[k] != card_xwin) { above = kids[k]; break; }
+                    if (is_stable[k]) { above = kids[k]; break; }
                 }
                 for (unsigned int k = i; k > 0; k--) {
-                    if (!is_bar[k - 1] && kids[k - 1] != card_xwin) { below = kids[k - 1]; break; }
+                    if (is_stable[k - 1]) { below = kids[k - 1]; break; }
                 }
                 G.raised_bars[G.n_raised_bars++] = (RaisedBar){kids[i], above, below};
                 XWindowChanges wc;
@@ -1984,6 +2041,7 @@ static void gallery_raise_bars(void) {
             }
             XFlush(dpy);
         }
+        g_free(is_stable);
         g_free(is_bar);
         XFree(kids);
     }
@@ -1997,32 +2055,34 @@ static gboolean window_in_list(Window w, const Window *kids, unsigned int nk) {
     return FALSE;
 }
 
-static void gallery_restore_bars(void) {
+static void picker_restore_bars(void) {
     if (G.n_raised_bars <= 0 || !G.raised_bars) return;
     GdkDisplay *gd = gdk_display_get_default();
     if (gd && GDK_IS_X11_DISPLAY(gd)) {
         Display *dpy = GDK_DISPLAY_XDISPLAY(gd);
         gdk_x11_display_error_trap_push(gd);
-        Window root_ret = None, parent_ret = None, *kids = NULL;
-        unsigned int nk = 0;
-        if (XQueryTree(dpy, DefaultRootWindow(dpy), &root_ret, &parent_ret, &kids, &nk) && kids) {
-            for (int i = 0; i < G.n_raised_bars; i++) {
-                RaisedBar *rb = &G.raised_bars[i];
-                if (!window_in_list(rb->bar, kids, nk)) continue;
-                XWindowChanges wc;
-                memset(&wc, 0, sizeof wc);
-                if (window_in_list(rb->prev_below, kids, nk)) {
-                    wc.sibling = rb->prev_below;
-                    wc.stack_mode = Above;
-                    XConfigureWindow(dpy, rb->bar, CWSibling | CWStackMode, &wc);
-                } else if (window_in_list(rb->prev_above, kids, nk)) {
-                    wc.sibling = rb->prev_above;
-                    wc.stack_mode = Below;
-                    XConfigureWindow(dpy, rb->bar, CWSibling | CWStackMode, &wc);
+        if (!has_other_active_overlay(dpy, None, G.mon)) {
+            Window root_ret = None, parent_ret = None, *kids = NULL;
+            unsigned int nk = 0;
+            if (XQueryTree(dpy, DefaultRootWindow(dpy), &root_ret, &parent_ret, &kids, &nk) && kids) {
+                for (int i = 0; i < G.n_raised_bars; i++) {
+                    RaisedBar *rb = &G.raised_bars[i];
+                    if (!window_in_list(rb->bar, kids, nk)) continue;
+                    XWindowChanges wc;
+                    memset(&wc, 0, sizeof wc);
+                    if (window_in_list(rb->prev_below, kids, nk)) {
+                        wc.sibling = rb->prev_below;
+                        wc.stack_mode = Above;
+                        XConfigureWindow(dpy, rb->bar, CWSibling | CWStackMode, &wc);
+                    } else if (window_in_list(rb->prev_above, kids, nk)) {
+                        wc.sibling = rb->prev_above;
+                        wc.stack_mode = Below;
+                        XConfigureWindow(dpy, rb->bar, CWSibling | CWStackMode, &wc);
+                    }
                 }
+                XFree(kids);
+                XFlush(dpy);
             }
-            XFree(kids);
-            XFlush(dpy);
         }
         gdk_x11_display_error_trap_pop_ignored(gd);
     }
@@ -2032,7 +2092,6 @@ static void gallery_restore_bars(void) {
 }
 
 static void gallery_after_show(void) {
-    gallery_raise_bars();
     misa_wall_pause_daemon(TRUE);
     gallery_start_thumbs();
 }
@@ -2615,11 +2674,14 @@ static gboolean on_term_sig(gpointer _d) {
 
 static gboolean build(void) {
     Rect mon = focused_monitor();
-    /* GALLERY covers the full monitor so wallpaper previews and pixel transitions
-     * extend seamlessly behind floating/island topbars, while Polybar windows on
-     * this monitor are raised directly above CardPicker. SHOWCASE/STRIPS stay
-     * below the bar so their backdrop blur leaves the bar sharp. */
-    Rect r = (A.layout == GALLERY) ? mon : below_bar(mon);
+    Rect safe = below_bar(mon);
+    G.mon = mon;
+    /* All three layouts cover the full monitor so wallpaper transitions and
+     * picom backdrop blur extend seamlessly behind floating/island/minimal
+     * topbars, while Polybar / dock windows on this monitor are raised
+     * directly above CardPicker so the bar stays sharp. SHOWCASE/STRIPS pad
+     * their content to the `safe` area below the bar strut. */
+    Rect r = mon;
     S.win = overlay_window("CardPicker", r.x, r.y, r.w, r.h);
     if (A.layout == GALLERY)                  /* opaque: nothing to blur behind it */
         gtk_widget_set_visual(S.win, gdk_screen_get_system_visual(gtk_widget_get_screen(S.win)));
@@ -2634,7 +2696,7 @@ static gboolean build(void) {
     if (A.layout == GALLERY) {
         box = build_gallery(mon, r);
     } else {
-    GtkWidget *body = A.layout == SHOWCASE ? build_showcase(r.w, r.h) : build_strips(r.w, r.h);
+    GtkWidget *body = A.layout == SHOWCASE ? build_showcase(safe.w, safe.h) : build_strips(safe.w, safe.h);
 
     GtkWidget *hints = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(hints, GTK_ALIGN_END);
@@ -2650,6 +2712,8 @@ static gboolean build(void) {
     }
 
     box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_margin_top(box, safe.y - mon.y);
+    gtk_widget_set_margin_bottom(box, (mon.y + mon.h) - (safe.y + safe.h));
     gtk_box_pack_start(GTK_BOX(box), gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0), TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(box), body, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), hints, TRUE, TRUE, 0);
@@ -2664,6 +2728,7 @@ static gboolean build(void) {
 
     g_signal_connect(S.win, "key-press-event", G_CALLBACK(on_key), NULL);
     gtk_widget_show_all(S.win);
+    picker_raise_bars();
     if (A.layout == GALLERY) gallery_after_show();
     select_item(A.select >= 0 && A.select < S.n ? A.select : 0, FALSE);
     gdk_display_flush(gdk_display_get_default());
@@ -2749,7 +2814,7 @@ int main(int argc, char **argv) {
     g_unix_signal_add(SIGINT, on_term_sig, NULL);
     gboolean ok = build();
     if (ok) gtk_main();
-    gboolean wait_fade = (A.layout == GALLERY && G.n_raised_bars > 0 && S.win
+    gboolean wait_fade = (G.n_raised_bars > 0 && S.win
                           && gdk_screen_is_composited(gtk_widget_get_screen(S.win)));
     if (S.win) {
         gtk_widget_hide(S.win);
@@ -2759,7 +2824,7 @@ int main(int argc, char **argv) {
         gdk_display_flush(gdk_display_get_default());
     }
     if (wait_fade) g_usleep(160000);
-    gallery_restore_bars();
+    picker_restore_bars();
     prune_previews();
     if (S.result < 0) return 1;
     printf("%d\n", S.result);

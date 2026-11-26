@@ -91,7 +91,7 @@ static struct {
     gboolean d_confirm;
     /* join page */
     GtkWidget *j_ssid, *j_entry, *j_btn, *j_err;
-    Rect mon, below;
+    Rect mon;
     char edge[8];
     int off, px, shade;
 } S;
@@ -259,32 +259,7 @@ static void anchor(gboolean pointer) {
         g_free(out);
     }
     if (!ok) S.mon = focused_monitor();
-    S.below = S.mon;
-    int btop = top >= BAR_MIN ? top : 0, bbot = bottom >= BAR_MIN ? bottom : 0;
-    S.below.y += btop;
-    S.below.h -= btop + bbot;
     S.anchor_cached = ok;
-}
-
-static int spawn_backdrop(Rect r) {
-    char *bin = g_build_filename(self_dir(), "misa-backdrop", NULL);
-    char a[4][16], spid[16];
-    g_snprintf(a[0], 16, "%d", r.x);
-    g_snprintf(a[1], 16, "%d", r.y);
-    g_snprintf(a[2], 16, "%d", r.w);
-    g_snprintf(a[3], 16, "%d", r.h);
-    g_snprintf(spid, 16, "%d", (int)getpid());
-    const char *argv[8] = {bin, a[0], a[1], a[2], a[3], "--pid", spid, NULL};
-    char *out = NULL;
-    int got = 0;
-    if (g_file_test(bin, G_FILE_TEST_IS_EXECUTABLE) &&
-        g_spawn_sync(NULL, (char **)argv, NULL, G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL, &out, NULL,
-                     NULL, NULL) && out) {
-        got = atoi(out);
-    }
-    g_free(out);
-    g_free(bin);
-    return got;
 }
 
 static void place(int h) {
@@ -1389,7 +1364,7 @@ static void panel_open(gboolean pointer) {
     gtk_widget_show(S.win);
     gdk_window_raise(gtk_widget_get_window(S.win));
     gdk_display_flush(gdk_display_get_default());
-    S.shade = spawn_backdrop(S.below);
+    S.shade = backdrop(S.mon, 0, NULL);
     gdk_window_raise(gtk_widget_get_window(S.win));
     grab_soon(S.win, G_CALLBACK(panel_close), NULL);
     if (was_warm) refresh_async();

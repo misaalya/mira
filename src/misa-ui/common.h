@@ -27,8 +27,8 @@ Rect focused_monitor(void);
 gboolean monitor_rect(const char *name, Rect *r);
 
 /* r without the bar: bspwm's top/bottom padding of the monitor at r (the
- * bar's strut, when at least BAR_MIN px). Backdrops and full-screen pickers
- * leave the bar uncovered, so it never gets dimmed or blurred. */
+ * bar's strut, when at least BAR_MIN px). Used for toast / panel / picker
+ * content placement so UI elements never collide with the bar. */
 #define BAR_MIN 8
 Rect below_bar(Rect r);
 
@@ -38,8 +38,10 @@ Rect below_bar(Rect r);
 void grab_soon(GtkWidget *win, GCallback on_fail, gpointer data);
 void ungrab(void);
 
-/* Dim + blur behind a popup (bin/misa-backdrop), all of r but the bar;
- * call before showing the popup. Returns its pid (0 when unavailable). */
+/* Dim + blur behind a popup (bin/misa-backdrop) across the full monitor r;
+ * misa-backdrop raises Polybar / dock windows above itself so the bar stays
+ * sharp while transparent bar gaps blur seamlessly. Call before showing the
+ * popup. Returns its pid (0 when unavailable). */
 int backdrop(Rect r, int pid, const char *click);
 void drop_backdrop(int pid);
 

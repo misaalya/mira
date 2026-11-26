@@ -342,7 +342,6 @@ const char *self_dir(void) {
 }
 
 int backdrop(Rect r, int pid, const char *click) {
-    r = below_bar(r);                          /* the bar stays sharp */
     char *bin = g_build_filename(self_dir(), "misa-backdrop", NULL);
     char a[4][16], spid[16];
     g_snprintf(a[0], 16, "%d", r.x);
