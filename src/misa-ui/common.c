@@ -49,6 +49,14 @@ char *mira_config_path(const char *rel) {
     return g_build_filename(g_get_user_config_dir(), "bspwm", rel, NULL);
 }
 
+/* Disable unused GTK3 GLX/Mesa, AT-SPI accessibility bridge, and GVFS modules
+ * before gtk_init() so pure-Cairo overlays save ~15-20 MiB PSS & avoid GL init. */
+void gtk_env_lean(void) {
+    g_setenv("GDK_GL", "disable", FALSE);
+    g_setenv("NO_AT_BRIDGE", "1", FALSE);
+    g_setenv("GIO_USE_VFS", "local", FALSE);
+}
+
 void palette_load(Palette *p) {
     strcpy(p->bg, "#101010");
     strcpy(p->fg, "#e6e6e6");

@@ -1147,9 +1147,10 @@ main { position: relative; z-index: 10; transition: opacity 180ms ease; }
 .steps > li.is-head { --c-top: var(--accent); }
 .steps > li:first-child { --c-top: transparent; }
 .steps > li:last-child { --c-bot: transparent; }
-.steps > li.is-past::after,
-.steps > li.is-head::after { width: 13px; background: var(--accent); }
-.steps > li.is-opt::after { width: 5px; }
+.steps > li.is-past:not(.is-opt)::after,
+.steps > li.is-head:not(.is-opt)::after { width: 13px; background: var(--accent); }
+.steps > li.is-opt::after { left: 1px; width: 4px; }
+.steps > li.is-opt.is-done::after { left: 0; width: 5px; background: var(--accent); }
 
 .step {
   display: grid;
@@ -1560,8 +1561,9 @@ body.has-live-pill .toast { bottom: calc(60px + env(safe-area-inset-bottom, 0px)
   .act-sep { display: none; }
   .steps > li { padding-left: 14px; --tick-y: 21px; }
   .steps > li::after { width: 6px; }
-  .steps > li.is-past::after, .steps > li.is-head::after { width: 9px; }
-  .steps > li.is-opt::after { width: 4px; }
+  .steps > li.is-past:not(.is-opt)::after, .steps > li.is-head:not(.is-opt)::after { width: 9px; }
+  .steps > li.is-opt::after { left: 1px; width: 3px; }
+  .steps > li.is-opt.is-done::after { left: 0; width: 4px; }
   .step { column-gap: 12px; padding: 11px 8px; font-size: 0.8rem; }
   .sec .step-cmd { white-space: normal; overflow-wrap: anywhere; }
   .step-note { font-size: 0.78rem; }

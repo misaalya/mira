@@ -6,7 +6,7 @@
 </h1>
 
 <p align="center">
-  A lightweight BSPWM desktop for Debian 13 (trixie) with five themes, five Polybar layouts,
+  A lightweight BSPWM desktop for Debian 13 (trixie) with five themes, six Polybar layouts,
   live 3px ordered-Bayer GLSL wallpapers, and a matching Qt 6 SDDM theme.
 </p>
 
@@ -46,19 +46,21 @@ repository.
 
 ## Features
 
-- **Five themes and five Polybar layouts.** Switch between `Mira`, `Matcha`, `Ember`, `Fjord`, and
-  `Aria` (`RiceSelector`) or mix any of the five Polybar geometries (`mira`, `mira-float`,
-  `mira-islands`, `mira-line`, `mira-minimal`) via `BarSelector`.
-- **Live animated shader wallpapers (`misa-wall`).** Bakes 3px ordered-Bayer GLSL fragment shaders
-  once offscreen into content-hashed planar-delta `.mwa` (LZ4 + `16×9` tile dirty masks) loops,
-  then plays them in a zero-OpenGL / zero-GdkPixbuf daemon (~1.8 MiB PSS active, ~0.75 MiB paused)
-  using hardware `XRender` nearest-neighbor 3× scaling from a `640×360` MIT-SHM buffer, adaptive
-  per-monitor occlusion FPS, and AVX2 Luma-Halftone Develop transitions. Also supports static
-  images with 0 MiB resident RAM.
+- **Five themes and six Polybar layouts.** Switch between `Mira`, `Matcha`, `Ember`, `Fjord`, and
+  `Aria` (`RiceSelector`) or mix any of the six Polybar geometries (`mira`, `mira-float`,
+  `mira-islands`, `mira-islands-v2`, `mira-line`, `mira-minimal`) via `BarSelector`.
+- **Live animated wallpapers (`misa-wall`).** Supports both Mira's 3px ordered-Bayer GLSL fragment
+  shaders (`.frag`) and user-supplied live wallpapers (**Animated GIF**, **Animated WebP**, **APNG**,
+  and **MP4/WebM/MKV/MOV** video loops). Bakes once offscreen into content-hashed planar-delta `.mwa`
+  v3 containers (BitPack + LZ4, `16×9` tile dirty masks, per-frame variable delays, duplicate-frame
+  coalescing), then plays in a zero-OpenGL / zero-GdkPixbuf daemon (~1.8 MiB PSS active, ~0.75 MiB
+  paused) with hardware `XRender` nearest/bilinear scaling, adaptive per-monitor occlusion FPS, and
+  AVX2 Luma-Halftone Develop transitions. Static images exit immediately with 0 MiB resident RAM.
 - **Scrolling layout (`Scroll`).** Per-desktop horizontal scrolling columns over the BSPWM Unix
   socket, alongside standard BSPWM tiling layouts (`Layout`).
-- **Full-screen pickers (`CardPicker`).** GPU-dithered 1:1 thumbnails for the wallpaper gallery
-  (`WallSelect`), theme showcase (`RiceSelector`), and bar strip selector (`BarSelector`).
+- **Full-screen pickers (`CardPicker`).** Zero-OpenGL wallpaper gallery (`WallSelect`) with CPU
+  Luma-Halftone Develop transitions behind floating topbars and live MWA3 `pread` preview, theme
+  showcase (`RiceSelector`), and bar strip selector (`BarSelector`).
 - **Qt 6 SDDM greeter (`sddm/mira`).** Matching 4×4 pixel-dithered underwater shader background,
   architectural pixel clock (`PixelClock.qml`), five switchable palettes (`F3`), and optional
   blurred desktop wallpaper sync (`SddmBackground`).
@@ -148,8 +150,9 @@ ordered-Bayer GLSL shader in `misa-wall`.
 | **Fjord** | Basalt slate · `#8db7d4` · `mira-minimal` | ![Fjord wall-01: Blue-Hour Fjord Boathouse](assets/screenshots/walls/fjord-01.webp) | ![Fjord wall-02: Glacier Station Overpass](assets/screenshots/walls/fjord-02.webp) |
 | **Aria** | Midnight navy · `#5ce6b8` · `mira-float` | ![Aria wall-01: Aurora Rooftop Observatory](assets/screenshots/walls/aria-01.webp) | ![Aria wall-02: Starlit Tidal Railway](assets/screenshots/walls/aria-02.webp) |
 
-You can also add your own static wallpapers with the `+` tile in `WallSelect` (`Super + Alt + W`),
-or copy them to `~/Pictures/Wallpapers`.
+You can also add your own static or live wallpapers (`.jpg`, `.png`, `.webp`, `.gif`, animated
+`.webp`/`.apng`, `.mp4`, `.webm`, `.mkv`, `.mov`, or image + `.frag` shader pairs) with the `+`
+tile in `WallSelect` (`Super + Alt + W`), or copy them to `~/Pictures/Wallpapers`.
 
 ## Polybar layouts
 
@@ -160,6 +163,7 @@ Press `Super + Alt + Space` (`BarSelector`) to switch layouts live without resta
 | `mira` | ![mira bar](assets/screenshots/bars/mira.webp) |
 | `mira-float` | ![mira-float bar](assets/screenshots/bars/mira-float.webp) |
 | `mira-islands` | ![mira-islands bar](assets/screenshots/bars/mira-islands.webp) |
+| `mira-islands-v2` | ![mira-islands-v2 bar](assets/screenshots/bars/mira-islands-v2.webp) |
 | `mira-line` | ![mira-line bar](assets/screenshots/bars/mira-line.webp) |
 | `mira-minimal` | ![mira-minimal bar](assets/screenshots/bars/mira-minimal.webp) |
 
@@ -274,8 +278,8 @@ Edit files in this repository and run `./tools/deploy.sh` to apply them.
 
 ```text
 src/       Native tools: misa-scroll, misa-wall, misa-clip, misa-backdrop (Rust, 0 crates),
-           misa-ui (C, GTK 3 + GLX live thumbnail renderer)
-session/   BSPWM session: bspwmrc, sxhkdrc, 5 themes + 10 live wallpapers, 5 Polybar layouts,
+           misa-ui (C, GTK 3, zero-OpenGL)
+session/   BSPWM session: bspwmrc, sxhkdrc, 5 themes + 10 live wallpapers, 6 Polybar layouts,
            rofi configs, picom rules, and control scripts (bin/)
 sddm/      Qt 6 SDDM login theme (sddm/mira/) with GPU Bayer pixel shader
 docs/      Static showcase website (GitHub Pages) with live WebGL 3px Bayer shaders

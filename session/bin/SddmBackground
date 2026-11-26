@@ -18,9 +18,23 @@ out="$dir/background.jpg"
 [ "$(cat "$dir/source" 2>/dev/null)" = "$wall" ] && [ "$out" -nt "$wall" ] && exit 0
 
 tmp="$dir/.background.$$.jpg"
-trap 'rm -f "$tmp"' EXIT
+frame_tmp=""
+trap 'rm -f "$tmp" "$frame_tmp"' EXIT
+src="${wall}[0]"
+case "$(printf '%s' "$wall" | tr '[:upper:]' '[:lower:]')" in
+    *.mp4 | *.webm | *.mkv | *.mov | *.m4v)
+        frame_tmp="$dir/.frame.$$.ppm"
+        if command -v misa-wall >/dev/null 2>&1 && misa-wall --thumb "$wall" "$frame_tmp" 640 360 2>/dev/null; then
+            src="$frame_tmp"
+        elif command -v ffmpeg >/dev/null 2>&1 && ffmpeg -v error -nostdin -i "$wall" -frames:v 1 -f image2 "$frame_tmp" 2>/dev/null; then
+            src="$frame_tmp"
+        else
+            exit 0
+        fi
+        ;;
+esac
 # Shrink, blur and scale back up: a strong blur for little CPU.
-nice -n 10 convert "${wall}[0]" -resize '1920x1080^' -gravity center -extent 1920x1080 \
+nice -n 10 convert "$src" -resize '1920x1080^' -gravity center -extent 1920x1080 \
     -resize 12.5% -blur 0x4 -resize 800% -quality 88 "$tmp" 2>/dev/null &&
     chmod 644 "$tmp" && mv -f "$tmp" "$out" &&
     printf '%s\n' "$wall" >"$dir/source"

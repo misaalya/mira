@@ -2,10 +2,13 @@
 //! BitPack-LZ4 delta + MIT-SHM daemon & Mira's original Luma-Halftone Develop
 //! AVX2 transition), written from scratch in crate-less Rust.
 //!
-//!   misa-wall [--no-transition|--instant] [--static] [--duration MS] [--fps N] <IMAGE>
+//!   misa-wall [--no-transition|--instant] [--static] [--duration MS] [--fps N] <IMAGE|MEDIA>
 //!   misa-wall pause | unpause | toggle | query | clear-cache | --stop-live
+//!   misa-wall --ensure-cache <IMAGE|MEDIA>
 //!   misa-wall --bake-frame <IMAGE> <FRAG> <OUT.ppm> [TIME_SEC]
 //!   misa-wall --bake-loop  <IMAGE> <FRAG> <OUT.mwa> [CELL_W CELL_H FPS FRAMES]
+//!   misa-wall --bake-media <MEDIA> <OUT.mwa> [MAX_W MAX_H MAX_FPS MAX_FRAMES]
+//!   misa-wall --thumb      <MEDIA> <OUT.ppm> [W H]
 //!   misa-wall --selftest
 
 mod baker;
@@ -63,11 +66,17 @@ const BAYER4_RAW: [[i32; 4]; 4] = [
     [15, 7, 13, 5],
 ];
 
-// Default seamless animation bake profile: 48 frames @ 12 FPS = 4.0s loop at 640x360.
+// Default seamless shader animation bake profile: 48 frames @ 12 FPS = 4.0s loop at 640x360.
 const DEFAULT_CELL_W: u32 = 640;
 const DEFAULT_CELL_H: u32 = 360;
 const DEFAULT_ANIM_FPS: u32 = 12;
 const DEFAULT_ANIM_FRAMES: u32 = 48;
+
+// Default user live media (GIF/WebP/APNG/video) bake caps: sharp & tiny PSS!
+const DEFAULT_MEDIA_MAX_W: u32 = 960;
+const DEFAULT_MEDIA_MAX_H: u32 = 540;
+const DEFAULT_MEDIA_FPS: u32 = 15;
+const DEFAULT_MEDIA_FRAMES: u32 = 240;
 
 #[repr(C)]
 pub struct XImage {
@@ -753,6 +762,9 @@ pub unsafe fn decode_and_scale(
         (api.new_from_file)(c_path.as_ptr(), null_mut())
     };
     if src.is_null() {
+        if baker::is_video_ext(Path::new(path)) {
+            return baker::decode_video_static_bgrx(path, sw, sh, monitors);
+        }
         return None;
     }
 
@@ -959,7 +971,7 @@ fn ensure_daemon_running() -> bool {
     if daemon::is_daemon_alive() {
         return true;
     }
-    // Clean up any legacy pre-upgrade `--live-daemon` process first.
+    // Clean up any stale daemon process before spawning a fresh one.
     unsafe { daemon::stop_daemon(); }
     let Ok(exe) = env::current_exe() else {
         return false;
@@ -1027,9 +1039,74 @@ fn ensure_mwa_cache(img_path: &Path, frag_path: &Path) -> Option<String> {
     }
 }
 
+fn ensure_media_mwa_cache(media_path: &Path) -> Option<String> {
+    let max_w: u32 = env::var("MISA_WALL_MEDIA_MAX_W")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_MEDIA_MAX_W)
+        .clamp(320, 1920);
+    let max_h: u32 = env::var("MISA_WALL_MEDIA_MAX_H")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_MEDIA_MAX_H)
+        .clamp(180, 1080);
+    let max_fps: u32 = env::var("MISA_WALL_MEDIA_FPS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_MEDIA_FPS)
+        .clamp(6, 20);
+    let max_frames: u32 = env::var("MISA_WALL_MEDIA_FRAMES")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_MEDIA_FRAMES)
+        .clamp(16, 480);
+    let filter_hint = env::var("MISA_WALL_MEDIA_FILTER").unwrap_or_default();
+
+    let hash = codec::compute_media_cache_hash(media_path, max_w, max_h, max_fps, max_frames, &filter_hint)?;
+    let out_mwa = codec::cache_path_for_hash(hash);
+    if out_mwa.is_file() {
+        if codec::MwaFile::open(&out_mwa).map(|m| m.src_hash == hash).unwrap_or(false) {
+            return Some(out_mwa.to_string_lossy().into_owned());
+        }
+        let _ = fs::remove_file(&out_mwa);
+    }
+
+    let exe = env::current_exe().ok()?;
+    let status = Command::new(exe)
+        .arg("--bake-media")
+        .arg(media_path)
+        .arg(&out_mwa)
+        .arg(max_w.to_string())
+        .arg(max_h.to_string())
+        .arg(max_fps.to_string())
+        .arg(max_frames.to_string())
+        .stdin(Stdio::null())
+        .status()
+        .ok()?;
+    if status.success() && out_mwa.is_file() {
+        Some(out_mwa.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
+/// Resolve & ensure `.mwa` cache for either a sidecar `.frag` shader wallpaper
+/// or a user-supplied animated media file (GIF/WebP/APNG/video).
+fn ensure_any_anim_cache(canon_img: &Path) -> Option<(String, String)> {
+    if let Some(frag) = daemon::find_sidecar_shader(canon_img) {
+        let mwa = ensure_mwa_cache(canon_img, &frag)?;
+        return Some((mwa, frag.to_string_lossy().into_owned()));
+    }
+    if baker::detect_media_anim(canon_img).is_some() {
+        let mwa = ensure_media_mwa_cache(canon_img)?;
+        return Some((mwa, String::new()));
+    }
+    None
+}
+
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  misa-wall [--no-transition|--instant] [--static] [--duration MS] [--fps 1..240] <image>\n  misa-wall pause | unpause | toggle | query | clear-cache | --stop-live\n  misa-wall --bake-frame <img> <frag> <out.ppm> [t_sec]\n  misa-wall --bake-loop  <img> <frag> <out.mwa> [w h fps frames]\n  misa-wall --selftest"
+        "usage:\n  misa-wall [--no-transition|--instant] [--static] [--duration MS] [--fps 1..240] <image|media>\n  misa-wall pause | unpause | toggle | query | clear-cache | --stop-live\n  misa-wall --ensure-cache <image|media>\n  misa-wall --bake-frame <img> <frag> <out.ppm> [t_sec]\n  misa-wall --bake-loop  <img> <frag> <out.mwa> [w h fps frames]\n  misa-wall --bake-media <media> <out.mwa> [max_w max_h max_fps max_frames]\n  misa-wall --thumb      <media> <out.ppm> [w h]\n  misa-wall --selftest"
     );
     std::process::exit(2);
 }
@@ -1092,6 +1169,18 @@ fn main() {
         match args[i].as_str() {
             "--no-transition" | "--instant" => instant = true,
             "--static" => force_static = true,
+            "--ensure-cache" if i + 1 < args.len() => {
+                let p = Path::new(&args[i + 1]);
+                if !p.is_file() {
+                    std::process::exit(1);
+                }
+                let canon = fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+                if let Some((mwa_path, _)) = ensure_any_anim_cache(&canon) {
+                    println!("{mwa_path}");
+                    return;
+                }
+                std::process::exit(1);
+            }
             "--bake-frame" if i + 3 < args.len() => {
                 let ip = &args[i + 1];
                 let fp = &args[i + 2];
@@ -1117,20 +1206,33 @@ fn main() {
                 };
                 std::process::exit(baker::bake_shader_loop(ip, fp, out, hash, fw, fh, bfps, frames));
             }
+            "--bake-media" if i + 2 < args.len() => {
+                let mp = &args[i + 1];
+                let out = Path::new(&args[i + 2]);
+                let mw: u32 = args.get(i + 3).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_MEDIA_MAX_W);
+                let mh: u32 = args.get(i + 4).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_MEDIA_MAX_H);
+                let mfps: u32 = args.get(i + 5).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_MEDIA_FPS);
+                let mframes: u32 = args.get(i + 6).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_MEDIA_FRAMES);
+                let filter_hint = env::var("MISA_WALL_MEDIA_FILTER").unwrap_or_default();
+                let force_nearest = filter_hint.eq_ignore_ascii_case("nearest");
+                let Some(hash) = codec::compute_media_cache_hash(Path::new(mp), mw, mh, mfps, mframes, &filter_hint) else {
+                    eprintln!("misa-wall: cannot read {mp}");
+                    std::process::exit(1);
+                };
+                std::process::exit(baker::bake_media_loop(mp, out, hash, mw, mh, mfps, mframes, force_nearest));
+            }
+            "--thumb" if i + 2 < args.len() => {
+                let mp = &args[i + 1];
+                let out = &args[i + 2];
+                let tw: u32 = args.get(i + 3).and_then(|s| s.parse().ok()).unwrap_or(176);
+                let th: u32 = args.get(i + 4).and_then(|s| s.parse().ok()).unwrap_or(99);
+                std::process::exit(baker::bake_media_thumb(mp, out, tw, th));
+            }
             "--duration" if i + 1 < args.len() => {
                 duration_ms = args[i + 1].parse().unwrap_or(540);
                 if duration_ms == 0 {
                     instant = true;
                 }
-                i += 1;
-            }
-            "--step" if i + 1 < args.len() => {
-                if args[i + 1].parse::<u8>().ok() == Some(255) {
-                    instant = true;
-                }
-                i += 1;
-            }
-            "--direction" if i + 1 < args.len() => {
                 i += 1;
             }
             "--fps" if i + 1 < args.len() => {
@@ -1154,33 +1256,32 @@ fn main() {
     }
     let canon_img = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let canon_str = canon_img.to_string_lossy().into_owned();
-    let sidecar_frag = if force_static {
-        None
-    } else {
-        daemon::find_sidecar_shader(&canon_img)
-    };
 
-    write_fehbg(&canon_img);
+    if !baker::is_video_ext(&canon_img) {
+        write_fehbg(&canon_img);
+    }
 
     let t_ms = if instant { 0 } else { duration_ms };
 
-    // 1. Animated theme wallpaper path (zero-GLX `awww`-style BitPack-LZ4 daemon!)
-    if let Some(ref frag) = sidecar_frag {
-        if let Some(mwa_path) = ensure_mwa_cache(&canon_img, frag) {
-            if ensure_daemon_running() {
-                let frag_str = frag.to_string_lossy();
-                let cmd = format!("SET_ANIM\t{canon_str}\t{frag_str}\t{mwa_path}\t{t_ms}\n");
-                if let Ok(resp) = daemon::ipc_send(&cmd) {
-                    if resp.starts_with("OK") {
-                        return;
-                    }
+    // 1. Animated wallpaper path (.frag shader sidecar OR user GIF/WebP/APNG/video!)
+    let anim_cached = if force_static {
+        None
+    } else {
+        ensure_any_anim_cache(&canon_img)
+    };
+    if let Some((mwa_path, frag_str)) = anim_cached {
+        if ensure_daemon_running() {
+            let frag_field = if frag_str.is_empty() { "-" } else { frag_str.as_str() };
+            let cmd = format!("SET_ANIM\t{canon_str}\t{frag_field}\t{mwa_path}\t{t_ms}\n");
+            if let Ok(resp) = daemon::ipc_send(&cmd) {
+                if resp.starts_with("OK") {
+                    return;
                 }
             }
         }
-        // Fallback cleanly to static wallpaper if OpenGL baking unavailable.
         unsafe { daemon::stop_daemon(); }
     } else if daemon::is_daemon_alive() {
-        // Switching from animated daemon -> static custom wallpaper seamlessly!
+        // Switching from animated daemon -> static wallpaper seamlessly!
         let cmd = format!("SET_STATIC\t{canon_str}\t{t_ms}\n");
         if let Ok(resp) = daemon::ipc_send(&cmd) {
             if resp.starts_with("OK") {

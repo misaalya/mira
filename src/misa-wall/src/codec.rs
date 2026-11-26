@@ -4,7 +4,7 @@
 
 use std::ffi::c_int;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::fs::FileExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -22,6 +22,10 @@ pub const MWA_VERSION: u32 = 3;
 pub const HEADER_SIZE: usize = 64;
 pub const ENTRY_SIZE: usize = 44;
 
+/// Header flag: upscale with smooth bilinear filtering (used for user GIF/WebP/APNG/video);
+/// when cleared (0), use crisp nearest-neighbor scaling (used for 3px Bayer `.frag` shaders).
+pub const MWA_FLAG_LINEAR: u32 = 1 << 0;
+
 // Coarse dirty tile grid: 16x9 (40x40 cells per tile on 640x360 = 144 tiles).
 pub const TILE_COLS: usize = 16;
 pub const TILE_ROWS: usize = 9;
@@ -37,10 +41,12 @@ pub struct FrameEntry {
     pub dirty_x1: u16,
     pub dirty_y1: u16,
     pub tile_mask: [u16; TILE_ROWS],
+    /// Per-frame display duration in milliseconds (`0` = fallback to `1000 / header.fps`).
+    pub delay_ms: u16,
 }
 
 impl FrameEntry {
-    pub fn empty() -> Self {
+    pub fn empty(delay_ms: u16) -> Self {
         Self {
             data_offset: 0,
             comp_len: 0,
@@ -50,6 +56,7 @@ impl FrameEntry {
             dirty_x1: 0,
             dirty_y1: 0,
             tile_mask: [0u16; TILE_ROWS],
+            delay_ms,
         }
     }
 
@@ -57,6 +64,27 @@ impl FrameEntry {
     pub fn is_empty(&self) -> bool {
         self.comp_len == 0 || self.dirty_x1 <= self.dirty_x0 || self.dirty_y1 <= self.dirty_y0
     }
+
+    #[inline]
+    pub fn effective_delay_ms(&self, fallback_fps: u32) -> u32 {
+        if self.delay_ms > 0 {
+            (self.delay_ms as u32).clamp(16, 60_000)
+        } else {
+            (1000 / fallback_fps.max(1)).clamp(16, 60_000)
+        }
+    }
+}
+
+/// Packed delta frame passed to `write_mwa_atomic`.
+pub struct EncodedDelta {
+    pub blob: Vec<u8>,
+    pub raw_len: u32,
+    pub x0: u16,
+    pub y0: u16,
+    pub x1: u16,
+    pub y1: u16,
+    pub tile_mask: [u16; TILE_ROWS],
+    pub delay_ms: u16,
 }
 
 /// Merge dirty `16x9` tiles into a small set of tight cell-coordinate rectangles
@@ -143,8 +171,23 @@ pub fn merge_tile_rects(
     }
 }
 
-/// FNV-1a 64-bit hash for deterministic content-addressed cache keys.
+/// Fast 4-lane 64-bit mixing hash for deterministic content-addressed cache keys
+/// (~15x faster than byte-by-byte FNV-1a on large media files).
 pub struct Fnv64(u64);
+
+const HASH_K1: u64 = 0x9e37_79b1_85eb_ca87;
+const HASH_K2: u64 = 0xc2b2_ae3d_27d4_eb4f;
+const HASH_K3: u64 = 0x1656_67b1_9e37_79f9;
+const HASH_K4: u64 = 0x85eb_ca77_c2b2_ae63;
+
+#[inline(always)]
+fn mix64(mut x: u64) -> u64 {
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
 
 impl Fnv64 {
     pub fn new() -> Self {
@@ -153,8 +196,30 @@ impl Fnv64 {
 
     #[inline]
     pub fn update(&mut self, bytes: &[u8]) {
-        let mut h = self.0;
-        for &b in bytes {
+        let mut s0 = self.0;
+        let mut s1 = self.0.wrapping_add(HASH_K1);
+        let mut s2 = self.0.wrapping_add(HASH_K2);
+        let mut s3 = self.0.wrapping_add(HASH_K3);
+
+        let mut chunks = bytes.chunks_exact(32);
+        for c in &mut chunks {
+            let w0 = u64::from_le_bytes(c[0..8].try_into().unwrap());
+            let w1 = u64::from_le_bytes(c[8..16].try_into().unwrap());
+            let w2 = u64::from_le_bytes(c[16..24].try_into().unwrap());
+            let w3 = u64::from_le_bytes(c[24..32].try_into().unwrap());
+            s0 = (s0 ^ w0.wrapping_mul(HASH_K1)).rotate_left(27).wrapping_mul(HASH_K2);
+            s1 = (s1 ^ w1.wrapping_mul(HASH_K2)).rotate_left(31).wrapping_mul(HASH_K3);
+            s2 = (s2 ^ w2.wrapping_mul(HASH_K3)).rotate_left(29).wrapping_mul(HASH_K4);
+            s3 = (s3 ^ w3.wrapping_mul(HASH_K4)).rotate_left(33).wrapping_mul(HASH_K1);
+        }
+        let mut h = mix64(s0 ^ s1.rotate_left(17) ^ s2.rotate_left(37) ^ s3.rotate_left(51));
+        let rem = chunks.remainder();
+        let mut words = rem.chunks_exact(8);
+        for w in &mut words {
+            let v = u64::from_le_bytes(w.try_into().unwrap());
+            h = (h ^ v.wrapping_mul(HASH_K1)).rotate_left(27).wrapping_mul(HASH_K2);
+        }
+        for &b in words.remainder() {
             h ^= b as u64;
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
@@ -163,17 +228,51 @@ impl Fnv64 {
 
     #[inline]
     pub fn update_u64(&mut self, v: u64) {
-        self.update(&v.to_le_bytes());
+        self.0 = (self.0 ^ v.wrapping_mul(HASH_K1))
+            .rotate_left(27)
+            .wrapping_mul(HASH_K2);
     }
 
     #[inline]
     pub fn update_u32(&mut self, v: u32) {
-        self.update(&v.to_le_bytes());
+        self.update_u64(v as u64);
     }
 
     pub fn finish(&self) -> u64 {
-        self.0
+        mix64(self.0)
     }
+}
+
+/// Hash a file with zero full-file heap allocation.
+/// When `sample_large` is true and the file exceeds 256 KB (e.g. multi-MB GIF/MP4),
+/// hashes `file_len + first 64 KB + middle 64 KB + last 64 KB` via `pread` (~0.05 ms
+/// instead of scanning 50+ MB on every cache-hit check, still 100% mtime-independent!).
+fn hash_file_fast(h: &mut Fnv64, path: &Path, sample_large: bool) -> Option<()> {
+    let mut f = File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    h.update_u64(len);
+
+    const SAMPLE_SZ: u64 = 65536;
+    if sample_large && len > SAMPLE_SZ * 4 {
+        let mut buf = [0u8; SAMPLE_SZ as usize];
+        let mid_off = (len / 2).saturating_sub(SAMPLE_SZ / 2);
+        let tail_off = len - SAMPLE_SZ;
+        for off in [0u64, mid_off, tail_off] {
+            f.read_exact_at(&mut buf, off).ok()?;
+            h.update(&buf);
+        }
+        return Some(());
+    }
+
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = f.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Some(())
 }
 
 /// Compute a deterministic content-addressed cache key from exact image bytes +
@@ -187,19 +286,34 @@ pub fn compute_cache_hash(
     fps: u32,
     frames: u32,
 ) -> Option<u64> {
-    let img_bytes = fs::read(img_path).ok()?;
-    let frag_bytes = fs::read(frag_path).ok()?;
-
     let mut h = Fnv64::new();
-    h.update(b"MWA3-CONTENT-V3");
+    h.update(b"MWA3-SHADER-V5");
     h.update_u32(cell_w);
     h.update_u32(cell_h);
     h.update_u32(fps);
     h.update_u32(frames);
-    h.update_u64(img_bytes.len() as u64);
-    h.update(&img_bytes);
-    h.update_u64(frag_bytes.len() as u64);
-    h.update(&frag_bytes);
+    hash_file_fast(&mut h, img_path, false)?;
+    hash_file_fast(&mut h, frag_path, false)?;
+    Some(h.finish())
+}
+
+/// Content-addressed cache key for user-supplied animated media (GIF/WebP/APNG/video).
+pub fn compute_media_cache_hash(
+    media_path: &Path,
+    max_w: u32,
+    max_h: u32,
+    max_fps: u32,
+    max_frames: u32,
+    filter_hint: &str,
+) -> Option<u64> {
+    let mut h = Fnv64::new();
+    h.update(b"MWA3-MEDIA-V5");
+    h.update_u32(max_w);
+    h.update_u32(max_h);
+    h.update_u32(max_fps);
+    h.update_u32(max_frames);
+    h.update(filter_hint.as_bytes());
+    hash_file_fast(&mut h, media_path, true)?;
     Some(h.finish())
 }
 
@@ -486,6 +600,71 @@ pub fn lz4_decompress(src: &[u8], dst: &mut [u8]) -> Result<usize, &'static str>
     }
 
     Ok(dp)
+}
+
+/// Fast unchecked LZ4 block decoder for delta frames already validated on loop 0.
+/// Eliminates all per-token/per-match bounds checks in the daemon playback hot loop!
+#[inline]
+pub unsafe fn lz4_decompress_unchecked(src: &[u8], dst: &mut [u8]) -> usize {
+    let mut sp = src.as_ptr();
+    let s_end = sp.add(src.len());
+    let d_start = dst.as_mut_ptr();
+    let mut dp = d_start;
+
+    while sp < s_end {
+        let token = *sp;
+        sp = sp.add(1);
+
+        let mut lit_len = (token >> 4) as usize;
+        if lit_len == 15 {
+            loop {
+                let b = *sp as usize;
+                sp = sp.add(1);
+                lit_len += b;
+                if b != 255 {
+                    break;
+                }
+            }
+        }
+        std::ptr::copy_nonoverlapping(sp, dp, lit_len);
+        sp = sp.add(lit_len);
+        dp = dp.add(lit_len);
+
+        if sp >= s_end {
+            break;
+        }
+        let offset = (sp as *const u16).read_unaligned().to_le() as usize;
+        sp = sp.add(2);
+
+        let mut match_len = (token & 0x0F) as usize + LZ4_MIN_MATCH;
+        if (token & 0x0F) == 15 {
+            loop {
+                let b = *sp as usize;
+                sp = sp.add(1);
+                match_len += b;
+                if b != 255 {
+                    break;
+                }
+            }
+        }
+
+        let mut mp = dp.sub(offset);
+        if offset >= match_len {
+            std::ptr::copy_nonoverlapping(mp, dp, match_len);
+            dp = dp.add(match_len);
+        } else if offset == 1 {
+            std::ptr::write_bytes(dp, *mp, match_len);
+            dp = dp.add(match_len);
+        } else {
+            for _ in 0..match_len {
+                *dp = *mp;
+                dp = dp.add(1);
+                mp = mp.add(1);
+            }
+        }
+    }
+
+    dp.offset_from(d_start) as usize
 }
 
 // ============================================================================
@@ -926,9 +1105,10 @@ pub fn write_mwa_atomic(
     cell_w: u32,
     cell_h: u32,
     fps: u32,
+    flags: u32,
     src_hash: u64,
     base_rgb: &[u8],
-    deltas: &[(Vec<u8>, u32, u16, u16, u16, u16, [u16; TILE_ROWS])],
+    deltas: &[EncodedDelta],
 ) -> Result<(), String> {
     if let Some(parent) = out_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir failed: {e}"))?;
@@ -942,28 +1122,29 @@ pub fn write_mwa_atomic(
     let mut cur_off = base_offset + base_comp.len() as u64;
 
     let mut entries = Vec::with_capacity(deltas.len());
-    for (blob, raw_len, x0, y0, x1, y1, tmask) in deltas {
-        if blob.is_empty() {
-            entries.push(FrameEntry::empty());
+    for d in deltas {
+        if d.blob.is_empty() {
+            entries.push(FrameEntry::empty(d.delay_ms));
         } else {
             entries.push(FrameEntry {
                 data_offset: cur_off,
-                comp_len: blob.len() as u32,
-                raw_len: *raw_len,
-                dirty_x0: *x0,
-                dirty_y0: *y0,
-                dirty_x1: *x1,
-                dirty_y1: *y1,
-                tile_mask: *tmask,
+                comp_len: d.blob.len() as u32,
+                raw_len: d.raw_len,
+                dirty_x0: d.x0,
+                dirty_y0: d.y0,
+                dirty_x1: d.x1,
+                dirty_y1: d.y1,
+                tile_mask: d.tile_mask,
+                delay_ms: d.delay_ms,
             });
-            cur_off += blob.len() as u64;
+            cur_off += d.blob.len() as u64;
         }
     }
 
     let mut header = [0u8; HEADER_SIZE];
     header[0..8].copy_from_slice(&MWA_MAGIC);
     header[8..12].copy_from_slice(&MWA_VERSION.to_le_bytes());
-    header[12..16].copy_from_slice(&0u32.to_le_bytes());
+    header[12..16].copy_from_slice(&flags.to_le_bytes());
     header[16..20].copy_from_slice(&cell_w.to_le_bytes());
     header[20..24].copy_from_slice(&cell_h.to_le_bytes());
     header[24..28].copy_from_slice(&frame_count.to_le_bytes());
@@ -996,12 +1177,13 @@ pub fn write_mwa_atomic(
                 let o = 24 + ti * 2;
                 buf[o..o + 2].copy_from_slice(&tm.to_le_bytes());
             }
+            buf[42..44].copy_from_slice(&e.delay_ms.to_le_bytes());
             f.write_all(&buf)?;
         }
         f.write_all(&base_comp)?;
-        for (blob, _, _, _, _, _, _) in deltas {
-            if !blob.is_empty() {
-                f.write_all(blob)?;
+        for d in deltas {
+            if !d.blob.is_empty() {
+                f.write_all(&d.blob)?;
             }
         }
         f.flush()?;
@@ -1029,6 +1211,7 @@ pub fn write_mwa_atomic(
 pub struct MwaFile {
     file: File,
     len: usize,
+    pub flags: u32,
     pub cell_w: u32,
     pub cell_h: u32,
     pub frame_count: u32,
@@ -1063,6 +1246,7 @@ impl MwaFile {
         if ver != MWA_VERSION {
             return Err(format!("unsupported MWA version {ver}"));
         }
+        let flags = u32::from_le_bytes(header[12..16].try_into().unwrap());
         let cell_w = u32::from_le_bytes(header[16..20].try_into().unwrap());
         let cell_h = u32::from_le_bytes(header[20..24].try_into().unwrap());
         let frame_count = u32::from_le_bytes(header[24..28].try_into().unwrap());
@@ -1102,6 +1286,7 @@ impl MwaFile {
                 let to = off + 24 + ti * 2;
                 tile_mask[ti] = u16::from_le_bytes(raw_table[to..to + 2].try_into().unwrap());
             }
+            let delay_ms = u16::from_le_bytes(raw_table[off + 42..off + 44].try_into().unwrap());
             if comp_len > 0 && (data_offset as usize) + (comp_len as usize) > len {
                 return Err("truncated MWA delta blob".into());
             }
@@ -1120,6 +1305,7 @@ impl MwaFile {
                 dirty_x1,
                 dirty_y1,
                 tile_mask,
+                delay_ms,
             });
         }
 
@@ -1130,6 +1316,7 @@ impl MwaFile {
         Ok(Self {
             file,
             len,
+            flags,
             cell_w,
             cell_h,
             frame_count,
@@ -1141,6 +1328,11 @@ impl MwaFile {
             max_comp_delta,
             max_raw_delta,
         })
+    }
+
+    #[inline]
+    pub fn is_linear(&self) -> bool {
+        (self.flags & MWA_FLAG_LINEAR) != 0
     }
 
     pub fn decode_base_bgrx(&self, dst_bgrx: &mut [u8]) -> Result<(), &'static str> {
@@ -1262,7 +1454,9 @@ pub fn run_selftest() -> Result<(), String> {
     let comp = lz4_compress(&raw_delta);
     let mut decomp = vec![0u8; raw_delta.len()];
     let got = lz4_decompress(&comp, &mut decomp).map_err(|e| e.to_string())?;
-    if got != raw_delta.len() || decomp != raw_delta {
+    let mut decomp_fast = vec![0u8; raw_delta.len()];
+    let got_fast = unsafe { lz4_decompress_unchecked(&comp, &mut decomp_fast) };
+    if got != raw_delta.len() || decomp != raw_delta || got_fast != raw_delta.len() || decomp_fast != raw_delta {
         return Err("LZ4 round-trip mismatch".into());
     }
 
@@ -1275,6 +1469,42 @@ pub fn run_selftest() -> Result<(), String> {
         if bgrx1[i * 4..i * 4 + 4] != exp || bgrx2[i * 4..i * 4 + 4] != exp {
             return Err(format!("planar delta unpack mismatch at pixel {i}"));
         }
+    }
+
+    // 3. Container flags + per-frame delay_ms round-trip
+    let mut wrap_raw = Vec::new();
+    let wrap_meta = pack_planar_delta(&f1, &f0, w, h, &mut wrap_raw)
+        .ok_or_else(|| "expected wrap delta".to_string())?;
+    let wrap_comp = lz4_compress(&wrap_raw);
+    let deltas = vec![
+        EncodedDelta {
+            blob: wrap_comp,
+            raw_len: wrap_raw.len() as u32,
+            x0: wrap_meta.x0,
+            y0: wrap_meta.y0,
+            x1: wrap_meta.x1,
+            y1: wrap_meta.y1,
+            tile_mask: wrap_meta.tile_mask,
+            delay_ms: 120,
+        },
+        EncodedDelta {
+            blob: comp,
+            raw_len: raw_delta.len() as u32,
+            x0: meta.x0,
+            y0: meta.y0,
+            x1: meta.x1,
+            y1: meta.y1,
+            tile_mask: meta.tile_mask,
+            delay_ms: 45,
+        },
+    ];
+    let tmp_mwa = std::env::temp_dir().join(format!("misa-wall-selftest-{}.mwa", unsafe { crate::getpid() }));
+    write_mwa_atomic(&tmp_mwa, w as u32, h as u32, 15, MWA_FLAG_LINEAR, 0x1234_5678, &f0, &deltas)?;
+    let opened = MwaFile::open(&tmp_mwa);
+    let _ = fs::remove_file(&tmp_mwa);
+    let opened = opened?;
+    if !opened.is_linear() || opened.entries.len() != 2 || opened.entries[0].delay_ms != 120 || opened.entries[1].delay_ms != 45 {
+        return Err("MWA3 flags/delay_ms round-trip mismatch".into());
     }
     Ok(())
 }

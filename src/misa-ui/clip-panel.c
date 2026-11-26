@@ -646,6 +646,7 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--daemon")) daemon = TRUE;
         else if (!strcmp(argv[i], "--pointer")) pointer = TRUE;
     }
+    gtk_env_lean();
     gtk_init(&argc, &argv);
     const char *cache = g_getenv("XDG_CACHE_HOME");
     char *base = cache && *cache ? g_strdup(cache) : g_build_filename(g_get_home_dir(), ".cache", NULL);

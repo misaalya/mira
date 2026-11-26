@@ -32,7 +32,8 @@ notify() {
 
 is_image() {
     case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-        *.jpg | *.jpeg | *.png | *.webp | *.bmp) return 0 ;;
+        *.jpg | *.jpeg | *.png | *.apng | *.webp | *.gif | *.bmp | *.mp4 | *.webm | *.mkv | *.mov | *.m4v)
+            return 0 ;;
     esac
     return 1
 }
@@ -56,6 +57,11 @@ add_one() {
         dest="$USER_WALL_DIR/$stem-$n.$ext"
     fi
     if cp -- "$src" "$dest"; then
+        # Preserve optional sibling GLSL .frag sidecar if user imports a custom shader wallpaper.
+        src_frag="${src%.*}.frag"
+        if [ -f "$src_frag" ]; then
+            cp -- "$src_frag" "${dest%.*}.frag" 2>/dev/null || true
+        fi
         added=$((added + 1))
         last_added=$dest
     fi
@@ -105,7 +111,7 @@ add_dialog() {
     fi
     rm -f "$chosen"
     if [ "$added" -gt 0 ]; then
-        notify "Wallpaper" "$added image(s) added to $USER_WALL_DIR"
+        notify "Wallpaper" "$added wallpaper(s) added to $USER_WALL_DIR"
     fi
 }
 
@@ -117,8 +123,11 @@ while :; do
     : >"$file_list"
     for d in "$USER_WALL_DIR" "$theme_walls"; do
         [ -d "$d" ] || continue
-        find "$d" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.bmp" \) |
-            LC_ALL=C sort >>"$file_list"
+        find "$d" -type f \( \
+            -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.apng" \
+            -o -iname "*.webp" -o -iname "*.gif" -o -iname "*.bmp" \
+            -o -iname "*.mp4" -o -iname "*.webm" -o -iname "*.mkv" -o -iname "*.mov" -o -iname "*.m4v" \
+            \) | LC_ALL=C sort >>"$file_list"
     done
 
     # Build menu rows in a single awk pass (CardPicker handles shared

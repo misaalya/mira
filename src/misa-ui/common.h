@@ -13,6 +13,7 @@ typedef struct {
 
 typedef struct { int x, y, w, h; } Rect;
 
+void gtk_env_lean(void);
 void palette_load(Palette *p);
 void css_load(const char *css);
 GtkWidget *overlay_window(const char *wmclass, int x, int y, int w, int h);

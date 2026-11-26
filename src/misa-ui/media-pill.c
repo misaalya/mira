@@ -954,6 +954,7 @@ static void build(void) {
 
 int main(int argc, char **argv) {
     if (!g_getenv("DISPLAY") || !*g_getenv("DISPLAY")) return 1;
+    gtk_env_lean();
     gtk_init(&argc, &argv);
     signal(SIGPIPE, SIG_IGN);
     /* bin/MediaPill checks this to run one UI at a time. */

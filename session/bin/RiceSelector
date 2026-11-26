@@ -31,7 +31,7 @@ idx=$(
     for theme in $themes; do
         wall=$(sed -n 's/^DEFAULT_WALL="\(.*\)"$/\1/p' "$theme/theme.conf" 2>/dev/null)
         wall=$(printf '%s' "$wall" | sed "s|^\${MIRA_DIR}|$MIRA_DIR|; s|^\$MIRA_DIR|$MIRA_DIR|; s|^\${HOME}|$HOME|; s|^\$HOME|$HOME|")
-        [ -f "$wall" ] || wall=$(find "$theme/walls" -maxdepth 1 -type f \( -iname '*.webp' -o -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) 2>/dev/null | sort | head -n 1)
+        [ -f "$wall" ] || wall=$(find "$theme/walls" -maxdepth 1 -type f \( -iname '*.webp' -o -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.gif' -o -iname '*.mp4' -o -iname '*.webm' \) 2>/dev/null | sort | head -n 1)
         bar=$(sed -n 's/^main_bar="\(.*\)".*/\1/p' "$theme/theme.conf" 2>/dev/null)
         printf '%s\t\t%s\t%s\n' \
             "$(printf '%s' "${theme##*/}" | tr '[:lower:]' '[:upper:]')" \

@@ -31,7 +31,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::codec::{
-    lz4_decompress, merge_tile_rects, unpack_planar_delta_bgrx,
+    lz4_decompress, lz4_decompress_unchecked, merge_tile_rects, unpack_planar_delta_bgrx,
     unpack_planar_delta_bgrx_unchecked, FrameEntry, MwaFile, TILE_ROWS,
 };
 use crate::{
@@ -403,9 +403,7 @@ pub unsafe fn stop_daemon() {
                 continue;
             }
             let Ok(cmd) = fs::read(format!("/proc/{pid}/cmdline")) else { continue; };
-            let is_daemon = cmd.windows(8).any(|w| w == b"--daemon")
-                || cmd.windows(13).any(|w| w == b"--live-daemon");
-            if !is_daemon {
+            if !cmd.windows(8).any(|w| w == b"--daemon") {
                 continue;
             }
             let Ok(env_raw) = fs::read(format!("/proc/{pid}/environ")) else { continue; };
@@ -878,7 +876,13 @@ unsafe fn compute_monitor_states(
 
 struct MonExpand {
     rect: MonRect,
+    cell_w: i32,
+    cell_h: i32,
     exact_3x: bool,
+    sx: f64,
+    sy: f64,
+    ox: f64,
+    oy: f64,
     xform: XTransform,
     x_lut: Vec<u16>,
     y_lut: Vec<u16>,
@@ -896,7 +900,13 @@ impl MonExpand {
             };
             return Self {
                 rect,
+                cell_w: cw,
+                cell_h: ch,
                 exact_3x: true,
+                sx: 1.0,
+                sy: 1.0,
+                ox: 0.0,
+                oy: 0.0,
                 xform,
                 x_lut: Vec::new(),
                 y_lut: Vec::new(),
@@ -925,28 +935,53 @@ impl MonExpand {
             ],
         };
 
-        let mut x_lut = Vec::with_capacity(rect.w as usize);
-        for lx in 0..rect.w {
-            let u = ((lx as f64 + 0.5) / mw) * sx + ox;
-            let cx = ((u * cw_f).floor() as i32).clamp(0, cw - 1) as u16;
-            x_lut.push(cx);
-        }
-        let mut y_lut = Vec::with_capacity(rect.h as usize);
-        for ly in 0..rect.h {
-            let v = ((ly as f64 + 0.5) / mh) * sy + oy;
-            let cy = ((v * ch_f).floor() as i32).clamp(0, ch - 1) as u16;
-            y_lut.push(cy);
-        }
+        // Lazy LUTs: 0 bytes allocated when hardware XRender handles scaling!
         Self {
             rect,
+            cell_w: cw,
+            cell_h: ch,
             exact_3x: false,
+            sx,
+            sy,
+            ox,
+            oy,
             xform,
-            x_lut,
-            y_lut,
+            x_lut: Vec::new(),
+            y_lut: Vec::new(),
         }
     }
 
-    /// Map cell rect `(cx0, cy0, cx1, cy1)` to monitor screen rect `(sx0, sy0, sx1, sy1)`.
+    fn ensure_luts(&mut self) {
+        if self.exact_3x || (!self.x_lut.is_empty() && !self.y_lut.is_empty()) {
+            return;
+        }
+        let mw = self.rect.w.max(1) as f64;
+        let mh = self.rect.h.max(1) as f64;
+        let cw_f = self.cell_w.max(1) as f64;
+        let ch_f = self.cell_h.max(1) as f64;
+        self.x_lut.reserve(self.rect.w as usize);
+        for lx in 0..self.rect.w {
+            let u = ((lx as f64 + 0.5) / mw) * self.sx + self.ox;
+            let cx = ((u * cw_f).floor() as i32).clamp(0, self.cell_w - 1) as u16;
+            self.x_lut.push(cx);
+        }
+        self.y_lut.reserve(self.rect.h as usize);
+        for ly in 0..self.rect.h {
+            let v = ((ly as f64 + 0.5) / mh) * self.sy + self.oy;
+            let cy = ((v * ch_f).floor() as i32).clamp(0, self.cell_h - 1) as u16;
+            self.y_lut.push(cy);
+        }
+    }
+
+    fn drop_luts(&mut self) {
+        self.x_lut.clear();
+        self.x_lut.shrink_to_fit();
+        self.y_lut.clear();
+        self.y_lut.shrink_to_fit();
+    }
+
+    /// Map cell rect `(cx0, cy0, cx1, cy1)` to monitor screen rect `(sx0, sy0, sx1, sy1)`
+    /// accounting for arbitrary cover-crop aspect ratios and bilinear filter padding.
     #[inline]
     fn cell_rect_to_screen(
         &self,
@@ -969,12 +1004,18 @@ impl MonExpand {
                 y1.clamp(self.rect.y, self.rect.y + self.rect.h),
             );
         }
-        let cw = cell_w.max(1);
-        let ch = cell_h.max(1);
-        let x0 = self.rect.x + ((cx0 * self.rect.w) / cw - 4).max(0);
-        let y0 = self.rect.y + ((cy0 * self.rect.h) / ch - 4).max(0);
-        let x1 = self.rect.x + (((cx1 * self.rect.w + cw - 1) / cw) + 4).min(self.rect.w);
-        let y1 = self.rect.y + (((cy1 * self.rect.h + ch - 1) / ch) + 4).min(self.rect.h);
+        let cw = cell_w.max(1) as f64;
+        let ch = cell_h.max(1) as f64;
+        let mw = self.rect.w as f64;
+        let mh = self.rect.h as f64;
+        let lx0 = (((cx0 as f64 / cw) - self.ox) / self.sx * mw).floor() as i32 - 4;
+        let ly0 = (((cy0 as f64 / ch) - self.oy) / self.sy * mh).floor() as i32 - 4;
+        let lx1 = (((cx1 as f64 / cw) - self.ox) / self.sx * mw).ceil() as i32 + 4;
+        let ly1 = (((cy1 as f64 / ch) - self.oy) / self.sy * mh).ceil() as i32 + 4;
+        let x0 = self.rect.x + lx0.clamp(0, self.rect.w);
+        let y0 = self.rect.y + ly0.clamp(0, self.rect.h);
+        let x1 = self.rect.x + lx1.clamp(0, self.rect.w);
+        let y1 = self.rect.y + ly1.clamp(0, self.rect.h);
         (x0, y0, x1, y1)
     }
 
@@ -982,7 +1023,7 @@ impl MonExpand {
     /// into full-screen `dst_bgrx` (`sw * sh * 4`). Used for Luma-Halftone transitions
     /// and non-XRender fallback.
     fn expand_bgrx_rect(
-        &self,
+        &mut self,
         cell_bgrx: &[u8],
         cell_w: usize,
         dst_bgrx: &mut [u8],
@@ -995,6 +1036,7 @@ impl MonExpand {
         if dx1 <= dx0 || dy1 <= dy0 {
             return;
         }
+        self.ensure_luts();
         let lx0 = (dx0 - self.rect.x).max(0) as usize;
         let ly0 = (dy0 - self.rect.y).max(0) as usize;
         let lx1 = (dx1 - self.rect.x).min(self.rect.w).max(0) as usize;
@@ -1242,6 +1284,7 @@ struct XRenderScaler {
     cell_pic: Picture,
     cell_w: i32,
     cell_h: i32,
+    filter_linear: bool,
     last_xform: Option<XTransform>,
 }
 
@@ -1268,8 +1311,19 @@ impl XRenderScaler {
             cell_pic: 0,
             cell_w: 0,
             cell_h: 0,
+            filter_linear: false,
             last_xform: None,
         })
+    }
+
+    unsafe fn apply_filter(&mut self, dpy: *mut Display, linear: bool) {
+        if self.cell_pic == 0 {
+            return;
+        }
+        let name = if linear { "bilinear" } else { "nearest" };
+        let cs = CString::new(name).unwrap();
+        XRenderSetPictureFilter(dpy, self.cell_pic, cs.as_ptr(), null(), 0);
+        self.filter_linear = linear;
     }
 
     unsafe fn ensure_cell_pixmap(
@@ -1279,8 +1333,12 @@ impl XRenderScaler {
         depth: i32,
         cw: i32,
         ch: i32,
+        linear: bool,
     ) -> bool {
         if self.cell_pmap != 0 && self.cell_w == cw && self.cell_h == ch {
+            if self.filter_linear != linear {
+                self.apply_filter(dpy, linear);
+            }
             return true;
         }
         self.free_cell_pixmap(dpy);
@@ -1295,14 +1353,13 @@ impl XRenderScaler {
             XFreePixmap(dpy, pmap);
             return false;
         }
-        let f_nearest = CString::new("nearest").unwrap();
-        XRenderSetPictureFilter(dpy, pic, f_nearest.as_ptr(), null(), 0);
         self.cell_pmap = pmap;
         self.cell_gc = gc;
         self.cell_pic = pic;
         self.cell_w = cw;
         self.cell_h = ch;
         self.last_xform = None;
+        self.apply_filter(dpy, linear);
         true
     }
 
@@ -1451,8 +1508,8 @@ impl AnimState {
         monitors: &[MonRect],
     ) -> Result<Self, String> {
         let mwa = MwaFile::open(Path::new(&mwa_path))?;
-        let comp_scratch = vec![0u8; mwa.max_comp_delta.max(16)];
-        let delta_scratch = vec![0u8; mwa.max_raw_delta.max(16)];
+        let comp_scratch = vec![0u8; mwa.max_comp_delta.clamp(16, 131_072)];
+        let delta_scratch = vec![0u8; mwa.max_raw_delta.clamp(16, 262_144)];
         let expands = monitors
             .iter()
             .map(|&r| MonExpand::new(r, mwa.cell_w, mwa.cell_h))
@@ -1493,10 +1550,20 @@ impl AnimState {
         self.canvas_synced = false;
     }
 
-    /// Stream next delta via `pread` and apply directly into `dst_bgrx` (`640x360` SHM)!
+    #[inline]
+    fn current_delay_ms(&self) -> u32 {
+        self.mwa
+            .entries
+            .get(self.frame_idx)
+            .map(|e| e.effective_delay_ms(self.mwa.fps))
+            .unwrap_or_else(|| (1000 / self.mwa.fps.max(1)).max(16))
+    }
+
+    /// Stream next delta via `pread` and apply directly into `dst_bgrx` SHM!
     fn advance_frame_into(&mut self, dst_bgrx: &mut [u8]) -> Result<FrameEntry, &'static str> {
         if !self.canvas_synced {
             self.reset_base_into(dst_bgrx)?;
+            let d0 = self.mwa.entries.first().map(|e| e.delay_ms).unwrap_or(0);
             return Ok(FrameEntry {
                 data_offset: 0,
                 comp_len: 1,
@@ -1506,6 +1573,7 @@ impl AnimState {
                 dirty_x1: self.mwa.cell_w as u16,
                 dirty_y1: self.mwa.cell_h as u16,
                 tile_mask: [u16::MAX; TILE_ROWS],
+                delay_ms: d0,
             });
         }
         let n = self.mwa.frame_count as usize;
@@ -1521,15 +1589,16 @@ impl AnimState {
             if self.delta_scratch.len() < raw_len {
                 self.delta_scratch.resize(raw_len, 0);
             }
-            let got = lz4_decompress(&self.comp_scratch[..read_n], &mut self.delta_scratch[..raw_len])?;
-            if got != raw_len {
-                return Err("delta lz4 size mismatch");
-            }
             if self.validated_loop {
                 unsafe {
+                    let _ = lz4_decompress_unchecked(&self.comp_scratch[..read_n], &mut self.delta_scratch[..raw_len]);
                     unpack_planar_delta_bgrx_unchecked(dst_bgrx, &self.delta_scratch[..raw_len]);
                 }
             } else {
+                let got = lz4_decompress(&self.comp_scratch[..read_n], &mut self.delta_scratch[..raw_len])?;
+                if got != raw_len {
+                    return Err("delta lz4 size mismatch");
+                }
                 unpack_planar_delta_bgrx(dst_bgrx, &self.delta_scratch[..raw_len])?;
             }
         }
@@ -1540,9 +1609,9 @@ impl AnimState {
         Ok(entry)
     }
 
-    fn expand_bgrx_full(&self, cell_bgrx: &[u8], dst_bgrx: &mut [u8], sw: usize) {
+    fn expand_bgrx_full(&mut self, cell_bgrx: &[u8], dst_bgrx: &mut [u8], sw: usize, drop_after: bool) {
         let cw = self.mwa.cell_w as usize;
-        for ex in &self.expands {
+        for ex in &mut self.expands {
             ex.expand_bgrx_rect(
                 cell_bgrx,
                 cw,
@@ -1553,6 +1622,9 @@ impl AnimState {
                 ex.rect.x + ex.rect.w,
                 ex.rect.y + ex.rect.h,
             );
+            if drop_after {
+                ex.drop_luts();
+            }
         }
     }
 }
@@ -1965,9 +2037,13 @@ pub fn run_daemon() -> i32 {
                                     })
                                     .collect::<Vec<_>>()
                                     .join(",");
+                                let kind = if a.frag_path.is_empty() { "media" } else { "shader" };
+                                let filter = if a.mwa.is_linear() { "bilinear" } else { "nearest" };
                                 format!(
-                                    "mode=anim\nscaler={}\nimg={}\nfrag={}\nmwa={}\ncache_kb={}\ncell={}x{}\nframes={}\nframe={}\nfps={}\nmon_fps={}\npaused={}\nvisible_monitors={}/{}\nwin_mapped={}\ncell_shm={}\nfull_shm={}\n{}\n",
+                                    "mode=anim\nkind={}\nscaler={}\nfilter={}\nimg={}\nfrag={}\nmwa={}\ncache_kb={}\ncell={}x{}\nframes={}\nframe={}\ndelay_ms={}\nfps={}\nmon_fps={}\npaused={}\nvisible_monitors={}/{}\nwin_mapped={}\ncell_shm={}\nfull_shm={}\n{}\n",
+                                    kind,
                                     scaler,
+                                    filter,
                                     a.img_path,
                                     a.frag_path,
                                     a.mwa_path,
@@ -1976,6 +2052,7 @@ pub fn run_daemon() -> i32 {
                                     a.mwa.cell_h,
                                     a.mwa.frame_count,
                                     a.frame_idx,
+                                    a.current_delay_ms(),
                                     a.mwa.fps,
                                     mon_fps,
                                     if user_paused { 1 } else { 0 },
@@ -2003,7 +2080,7 @@ pub fn run_daemon() -> i32 {
                             let parts: Vec<&str> = rest.split('\t').collect();
                             if parts.len() >= 4 {
                                 let ip = parts[0].to_string();
-                                let fp = parts[1].to_string();
+                                let fp = if parts[1] == "-" { String::new() } else { parts[1].to_string() };
                                 let mp = parts[2].to_string();
                                 let t_ms: u64 = parts[3].parse().unwrap_or(0);
                                 term_opaque = detect_terminal_opaque();
@@ -2018,18 +2095,18 @@ pub fn run_daemon() -> i32 {
                                 } else {
                                     // Snapshot current pixels ONLY if transition requested.
                                     let prev_bgrx: Option<Vec<u8>> = if t_ms > 0 {
-                                        if let Some(ref old_a) = anim {
+                                        if let Some(ref mut old_a) = anim {
                                             let mut b = vec![0u8; (sw as usize) * (sh as usize) * 4];
                                             if old_a.canvas_synced
                                                 && cell_shm.is_attached()
                                                 && cell_shm.sw == old_a.mwa.cell_w as i32
                                                 && cell_shm.sh == old_a.mwa.cell_h as i32
                                             {
-                                                old_a.expand_bgrx_full(cell_shm.pixels(), &mut b, sw as usize);
+                                                old_a.expand_bgrx_full(cell_shm.pixels(), &mut b, sw as usize, xrender.is_some());
                                             } else {
                                                 let mut tmp_cell = vec![0u8; (old_a.mwa.cell_w as usize) * (old_a.mwa.cell_h as usize) * 4];
                                                 if old_a.mwa.decode_base_bgrx(&mut tmp_cell).is_ok() {
-                                                    old_a.expand_bgrx_full(&tmp_cell, &mut b, sw as usize);
+                                                    old_a.expand_bgrx_full(&tmp_cell, &mut b, sw as usize, xrender.is_some());
                                                 }
                                             }
                                             Some(b)
@@ -2053,7 +2130,7 @@ pub fn run_daemon() -> i32 {
                                             } else {
                                                 let _ = fs::write(&sfile, format!("{ip}\n{fp}\n"));
                                                 if let Some(ref mut xr) = xrender {
-                                                    if xr.ensure_cell_pixmap(dpy, root, depth, cw, ch) {
+                                                    if xr.ensure_cell_pixmap(dpy, root, depth, cw, ch, new_anim.mwa.is_linear()) {
                                                         xr.upload_cell_rect(dpy, &cell_shm, 0, 0, cw, ch);
                                                     }
                                                 }
@@ -2061,7 +2138,7 @@ pub fn run_daemon() -> i32 {
                                                 let mut started_trans = false;
                                                 if let Some(src_bgrx) = prev_bgrx {
                                                     let mut tgt_bgrx = vec![0u8; (sw as usize) * (sh as usize) * 4];
-                                                    new_anim.expand_bgrx_full(cell_shm.pixels(), &mut tgt_bgrx, sw as usize);
+                                                    new_anim.expand_bgrx_full(cell_shm.pixels(), &mut tgt_bgrx, sw as usize, xrender.is_some());
                                                     if src_bgrx != tgt_bgrx
                                                         && full_shm.ensure_attached(dpy, vis, depth, sw, sh)
                                                     {
@@ -2107,7 +2184,7 @@ pub fn run_daemon() -> i32 {
                                                         );
                                                         full_shm.detach(dpy);
                                                     } else if full_shm.ensure_attached(dpy, vis, depth, sw, sh) {
-                                                        new_anim.expand_bgrx_full(cell_shm.pixels(), full_shm.pixels_mut(), sw as usize);
+                                                        new_anim.expand_bgrx_full(cell_shm.pixels(), full_shm.pixels_mut(), sw as usize, false);
                                                         full_shm.put_rect(dpy, win, gc, 0, 0, sw, sh);
                                                         sync_daemon_root_pixmap_from_shm(
                                                             dpy, root, gc, &full_shm, depth, sw, sh,
@@ -2144,14 +2221,14 @@ pub fn run_daemon() -> i32 {
                                 let t_ms: u64 = parts[1].parse().unwrap_or(0);
                                 if let Some(tgt_bgrx) = decode_and_scale(ip, sw, sh, &monitors) {
                                     let prev_bgrx: Option<Vec<u8>> = if t_ms > 0 {
-                                        if let Some(ref old_a) = anim {
+                                        if let Some(ref mut old_a) = anim {
                                             let mut b = vec![0u8; (sw as usize) * (sh as usize) * 4];
                                             if old_a.canvas_synced && cell_shm.is_attached() {
-                                                old_a.expand_bgrx_full(cell_shm.pixels(), &mut b, sw as usize);
+                                                old_a.expand_bgrx_full(cell_shm.pixels(), &mut b, sw as usize, true);
                                             } else {
                                                 let mut tmp_cell = vec![0u8; (old_a.mwa.cell_w as usize) * (old_a.mwa.cell_h as usize) * 4];
                                                 if old_a.mwa.decode_base_bgrx(&mut tmp_cell).is_ok() {
-                                                    old_a.expand_bgrx_full(&tmp_cell, &mut b, sw as usize);
+                                                    old_a.expand_bgrx_full(&tmp_cell, &mut b, sw as usize, true);
                                                 }
                                             }
                                             Some(b)
@@ -2339,7 +2416,7 @@ pub fn run_daemon() -> i32 {
                                 let ch = a.mwa.cell_h as i32;
                                 if cell_shm.is_attached()
                                     && a.canvas_synced
-                                    && xr.ensure_cell_pixmap(dpy, root, depth, cw, ch)
+                                    && xr.ensure_cell_pixmap(dpy, root, depth, cw, ch, a.mwa.is_linear())
                                 {
                                     xr.upload_cell_rect(dpy, &cell_shm, 0, 0, cw, ch);
                                     xr.sync_root_pixmap(
@@ -2399,22 +2476,28 @@ pub fn run_daemon() -> i32 {
                 next_canvas_at = t0;
             }
 
-            // 6. Per-monitor independent adaptive FPS!
+            // 6. Per-monitor adaptive pacing with per-frame variable delay_ms (awww-style)!
             if t0.duration_since(last_batt_check) >= Duration::from_secs(15) {
                 last_batt_check = t0;
                 batt_mode = on_battery_power();
             }
 
-            let base_fps = anim.as_ref().map(|a| a.mwa.fps).unwrap_or(12);
-            let full_fps = fps_override.unwrap_or(if batt_mode { base_fps.min(10) } else { base_fps });
-            let work_fps = work_fps_override.unwrap_or(if batt_mode { 4 } else { 5 }).min(full_fps);
-            let full_dur = Duration::from_nanos(1_000_000_000 / (full_fps.max(1) as u64));
-            let work_dur = Duration::from_nanos(1_000_000_000 / (work_fps.max(1) as u64));
+            let compute_durs = |a: &AnimState| -> (Duration, Duration) {
+                let raw_ms = if let Some(ov) = fps_override {
+                    (1000 / ov.max(1)).max(16)
+                } else {
+                    let d = a.current_delay_ms();
+                    if batt_mode { d.max(100) } else { d }
+                };
+                let work_floor = 1000 / work_fps_override.unwrap_or(if batt_mode { 4 } else { 5 }).max(1);
+                let full_d = Duration::from_millis(raw_ms as u64);
+                let work_d = Duration::from_millis(raw_ms.max(work_floor) as u64);
+                (full_d, work_d)
+            };
 
             let any_full_vis = mon_states.iter().any(|s| s.visible && !s.mostly_covered);
-            let canvas_dur = if any_full_vis { full_dur } else { work_dur };
 
-            // 7. Advance 640x360 BGRX SHM directly & hardware-composite ONLY dirty tiles!
+            // 7. Advance cell BGRX SHM directly & hardware-composite ONLY dirty tiles!
             let any_mon_due = (0..monitors.len())
                 .any(|i| mon_states[i].visible && (mon_full_repaint[i] || t0 >= mon_next_due[i]));
             let canvas_due = t0 >= next_canvas_at;
@@ -2423,6 +2506,7 @@ pub fn run_daemon() -> i32 {
                 if let Some(ref mut a) = anim {
                     let cw = a.mwa.cell_w as i32;
                     let ch = a.mwa.cell_h as i32;
+                    let linear = a.mwa.is_linear();
                     let was_detached = !cell_shm.is_attached() || cell_shm.sw != cw || cell_shm.sh != ch;
                     if cell_shm.ensure_attached(dpy, vis, depth, cw, ch) {
                         if was_detached {
@@ -2454,8 +2538,12 @@ pub fn run_daemon() -> i32 {
                                     }
                                 }
                             }
+                            let (full_dur, work_dur) = compute_durs(a);
+                            let canvas_dur = if any_full_vis { full_dur } else { work_dur };
                             next_canvas_at = t0 + canvas_dur;
                         }
+
+                        let (full_dur, work_dur) = compute_durs(a);
 
                         let mut any_blitted = false;
                         let mut remapped_now = false;
@@ -2467,8 +2555,8 @@ pub fn run_daemon() -> i32 {
                         }
 
                         if let Some(ref mut xr) = xrender {
-                            // Hardware XRender path: upload ONLY dirty tiles to 640x360 Pixmap!
-                            if xr.ensure_cell_pixmap(dpy, root, depth, cw, ch) {
+                            // Hardware XRender path: upload ONLY dirty tiles to cell Pixmap!
+                            if xr.ensure_cell_pixmap(dpy, root, depth, cw, ch, linear) {
                                 if pmap_full_upload || remapped_now {
                                     xr.upload_cell_rect(dpy, &cell_shm, 0, 0, cw, ch);
                                     pmap_full_upload = false;
@@ -2542,7 +2630,7 @@ pub fn run_daemon() -> i32 {
                             // CPU fallback when XRender extension is absent.
                             let cell_slice = cell_shm.pixels();
                             if remapped_now {
-                                a.expand_bgrx_full(cell_slice, full_shm.pixels_mut(), sw as usize);
+                                a.expand_bgrx_full(cell_slice, full_shm.pixels_mut(), sw as usize, false);
                                 full_shm.put_rect(dpy, win, gc, 0, 0, sw, sh);
                                 for i in 0..a.expands.len() {
                                     mon_full_repaint[i] = false;
@@ -2551,7 +2639,7 @@ pub fn run_daemon() -> i32 {
                                 }
                                 any_blitted = true;
                             } else {
-                            for (i, ex) in a.expands.iter().enumerate() {
+                            for (i, ex) in a.expands.iter_mut().enumerate() {
                                 let st = mon_states[i];
                                 if !st.visible {
                                     mon_dirty[i] = None;
@@ -2609,7 +2697,7 @@ pub fn run_daemon() -> i32 {
                 }
             }
             if let Some(rem) = soonest.checked_duration_since(now) {
-                let ms = rem.as_millis().min(500) as c_int;
+                let ms = rem.as_millis().min(5000) as c_int;
                 if ms > 0 {
                     let mut pfds = [
                         PollFd { fd: x_fd, events: POLLIN, revents: 0 },
@@ -2624,14 +2712,14 @@ pub fn run_daemon() -> i32 {
 
         // Clean shutdown: preserve last frame on persistent _XROOTPMAP_ID.
         if !exit_after_static_handover && owned_root_pmap != 0 {
-            if let Some(ref a) = anim {
+            if let Some(ref mut a) = anim {
                 let mut bgrx = vec![0u8; (sw as usize) * (sh as usize) * 4];
                 if a.canvas_synced && cell_shm.is_attached() {
-                    a.expand_bgrx_full(cell_shm.pixels(), &mut bgrx, sw as usize);
+                    a.expand_bgrx_full(cell_shm.pixels(), &mut bgrx, sw as usize, true);
                 } else {
                     let mut tmp_cell = vec![0u8; (a.mwa.cell_w as usize) * (a.mwa.cell_h as usize) * 4];
                     if a.mwa.decode_base_bgrx(&mut tmp_cell).is_ok() {
-                        a.expand_bgrx_full(&tmp_cell, &mut bgrx, sw as usize);
+                        a.expand_bgrx_full(&tmp_cell, &mut bgrx, sw as usize, true);
                     }
                 }
                 let _ = publish_persistent_root_pixmap(&bgrx, sw, sh, &monitors);

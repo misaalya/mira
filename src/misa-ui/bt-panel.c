@@ -891,6 +891,7 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--pointer")) S.pointer = TRUE;
     if (!single()) return 0;
     close_bar_popups("bt");
+    gtk_env_lean();
     gtk_init(&argc, &argv);
     g_unix_signal_add(SIGTERM, on_term, NULL);
     build();

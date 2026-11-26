@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # =============================================================
-# Builds assets/fonts/MiraCaps.ttf: the two end caps of the
-# mira-islands bar capsules, a pill end slanted like "/"
-# (Nerd Font has slanted or rounded caps, not both).
-#   U+E100  left cap  (left edge leans "/")
-#   U+E101  right cap (right edge leans "/")
+# Builds assets/fonts/MiraCaps.ttf: the end caps of Mira's island topbars.
+#   U+E100  capl  — slanted "/" left cap   (mira-islands)
+#   U+E101  capr  — slanted "/" right cap  (mira-islands)
+#   U+E102  pilll — upright full-pill left cap  (mira-islands-v2)
+#   U+E103  pillr — upright full-pill right cap (mira-islands-v2)
 #
 # Each cap starts as an upright rounded end (two quarter circles of
 # radius --radius; at the maximum, half the height, a full half
@@ -36,7 +36,7 @@ from fontTools.pens.ttGlyphPen import TTGlyphPen
 UPM, ASC, DESC = 1000, 800, -200
 HEIGHT = ASC - DESC
 OVER = 40          # drawn past the advance, under the capsule body
-ARC_STEP = 30      # degrees per quadratic piece; keeps the arcs truly round
+ARC_STEP = 15      # degrees per quadratic piece; keeps arcs mathematically circular
 
 
 class Cap:
@@ -119,29 +119,49 @@ class Cap:
         return best
 
 
-def build(cap, out):
+def build(slanted_cap, pill_cap, out):
     empty = TTGlyphPen(None).glyph()
     fb = FontBuilder(UPM, isTTF=True)
-    order = [".notdef", "space", "capl", "capr"]
+    order = [".notdef", "space", "capl", "capr", "pilll", "pillr"]
     fb.setupGlyphOrder(order)
-    fb.setupCharacterMap({0x20: "space", 0xE100: "capl", 0xE101: "capr"})
-    fb.setupGlyf({".notdef": empty, "space": empty,
-                  "capl": cap.glyph(False), "capr": cap.glyph(True)})
+    fb.setupCharacterMap({
+        0x20: "space",
+        0xE100: "capl",
+        0xE101: "capr",
+        0xE102: "pilll",
+        0xE103: "pillr",
+    })
+    fb.setupGlyf({
+        ".notdef": empty,
+        "space": empty,
+        "capl": slanted_cap.glyph(False),
+        "capr": slanted_cap.glyph(True),
+        "pilll": pill_cap.glyph(False),
+        "pillr": pill_cap.glyph(True),
+    })
     # The left side bearing must be each glyph's real xMin: FreeType moves
     # the outline to match it, so a wrong value shifts the cap away from
     # the capsule body and leaves a gap.
     glyf = fb.font["glyf"]
-    lsb = {}
+    adv_map = {
+        ".notdef": slanted_cap.adv,
+        "space": slanted_cap.adv,
+        "capl": slanted_cap.adv,
+        "capr": slanted_cap.adv,
+        "pilll": pill_cap.adv,
+        "pillr": pill_cap.adv,
+    }
+    metrics = {}
     for name in order:
         g = glyf[name]
         g.recalcBounds(glyf)
-        lsb[name] = getattr(g, "xMin", 0)
-    fb.setupHorizontalMetrics({name: (cap.adv, lsb[name]) for name in order})
+        metrics[name] = (adv_map[name], getattr(g, "xMin", 0))
+    fb.setupHorizontalMetrics(metrics)
     fb.setupHorizontalHeader(ascent=ASC, descent=DESC)
     fb.setupNameTable({"familyName": "Mira Caps", "styleName": "Regular",
                        "uniqueFontIdentifier": "MiraCaps-Regular",
                        "fullName": "Mira Caps", "psName": "MiraCaps-Regular",
-                       "version": "Version 1.0",
+                       "version": "Version 2.0",
                        "licenseDescription": "GPL-3.0-only"})
     fb.setupOS2(sTypoAscender=ASC, sTypoDescender=DESC, sTypoLineGap=0,
                 usWinAscent=ASC, usWinDescent=-DESC, fsType=0)
@@ -161,12 +181,15 @@ def main():
     ap.add_argument("--check", type=float, metavar="PX",
                     help="print the tightest curve radius at this pixel size")
     args = ap.parse_args()
-    cap = Cap(args.radius, args.slant)
-    build(cap, args.out)
+    slanted = Cap(args.radius, args.slant)
+    pill = Cap(500, 0)
+    build(slanted, pill, args.out)
     if args.check:
         scale = args.check / UPM
-        print(f"advance {cap.adv * scale:.1f}px, tightest curve radius "
-              f"{cap.tightest_radius() * scale:.1f}px at {args.check:g}px")
+        print(f"slanted: advance {slanted.adv * scale:.1f}px, tightest radius "
+              f"{slanted.tightest_radius() * scale:.1f}px at {args.check:g}px")
+        print(f"pill:    advance {pill.adv * scale:.1f}px, tightest radius "
+              f"{pill.tightest_radius() * scale:.1f}px at {args.check:g}px")
 
 
 if __name__ == "__main__":

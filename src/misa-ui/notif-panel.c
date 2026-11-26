@@ -1938,10 +1938,7 @@ static int run_daemon(int argc, char **argv) {
     S.fifo_fd = open(fifo, O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (S.fifo_fd < 0) return 1;
 
-    g_setenv("GDK_GL", "disable", FALSE);
-    g_setenv("NO_AT_BRIDGE", "1", FALSE);
-    g_setenv("GIO_USE_VFS", "local", FALSE);
-
+    gtk_env_lean();
     gtk_init(&argc, &argv);
     S.next_id = 1;
     load_theme();

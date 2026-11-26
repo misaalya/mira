@@ -5,13 +5,16 @@
 //! (one-time `.mwa` cache generation) calls, which exit immediately afterward so
 //! the persistent desktop wallpaper daemon uses 0 MiB of Mesa/GLX RAM forever!
 
-use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulong, c_void, CStr, CString};
-use std::fs;
-use std::io::Write;
+use std::ffi::{c_char, c_int, c_long, c_uchar, c_uint, c_ulong, c_void, CStr, CString};
+use std::fs::{self, File};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::ptr::{null, null_mut};
 
-use crate::codec::{lz4_compress, pack_planar_delta, write_mwa_atomic, TILE_ROWS};
+use crate::codec::{
+    lz4_compress, pack_planar_delta, write_mwa_atomic, EncodedDelta, MWA_FLAG_LINEAR, TILE_ROWS,
+};
 use crate::{
     decode_rgb_image_scaled, getpid, ignore_x_err, Display, Visual, Window, XDefaultRootWindow,
     XDefaultScreen, XFree, XOpenDisplay, XSetErrorHandler, XSync,
@@ -758,11 +761,20 @@ pub fn bake_shader_loop(
         drop(head_raw);
         drop(tail_raw);
 
+        let frame_delay = ((1000 + fps / 2) / fps.max(1)).clamp(16, 1000) as u16;
         let base_rgb = blended_head[0].clone();
-        let mut deltas: Vec<(Vec<u8>, u32, u16, u16, u16, u16, [u16; TILE_ROWS])> =
-            Vec::with_capacity(n);
+        let mut deltas: Vec<EncodedDelta> = Vec::with_capacity(n);
         // Placeholder for frame 0 wrap delta (frame n-1 -> frame 0), filled at the end.
-        deltas.push((Vec::new(), 0, 0, 0, 0, 0, [0u16; TILE_ROWS]));
+        deltas.push(EncodedDelta {
+            blob: Vec::new(),
+            raw_len: 0,
+            x0: 0,
+            y0: 0,
+            x1: 0,
+            y1: 0,
+            tile_mask: [0u16; TILE_ROWS],
+            delay_ms: frame_delay,
+        });
 
         let mut raw_delta = Vec::with_capacity(frame_bytes / 2);
         let mut prev = blended_head[0].clone();
@@ -772,9 +784,27 @@ pub fn bake_shader_loop(
             let cur = &blended_head[f];
             if let Some(m) = pack_planar_delta(&prev, cur, w, h, &mut raw_delta) {
                 let comp = lz4_compress(&raw_delta);
-                deltas.push((comp, raw_delta.len() as u32, m.x0, m.y0, m.x1, m.y1, m.tile_mask));
+                deltas.push(EncodedDelta {
+                    blob: comp,
+                    raw_len: raw_delta.len() as u32,
+                    x0: m.x0,
+                    y0: m.y0,
+                    x1: m.x1,
+                    y1: m.y1,
+                    tile_mask: m.tile_mask,
+                    delay_ms: frame_delay,
+                });
             } else {
-                deltas.push((Vec::new(), 0, 0, 0, 0, 0, [0u16; TILE_ROWS]));
+                deltas.push(EncodedDelta {
+                    blob: Vec::new(),
+                    raw_len: 0,
+                    x0: 0,
+                    y0: 0,
+                    x1: 0,
+                    y1: 0,
+                    tile_mask: [0u16; TILE_ROWS],
+                    delay_ms: frame_delay,
+                });
             }
             prev.copy_from_slice(cur);
         }
@@ -786,9 +816,27 @@ pub fn bake_shader_loop(
             r.render_rgb_topdown(t0 + (f as f32) * dt, &mut scratch, &mut cur);
             if let Some(m) = pack_planar_delta(&prev, &cur, w, h, &mut raw_delta) {
                 let comp = lz4_compress(&raw_delta);
-                deltas.push((comp, raw_delta.len() as u32, m.x0, m.y0, m.x1, m.y1, m.tile_mask));
+                deltas.push(EncodedDelta {
+                    blob: comp,
+                    raw_len: raw_delta.len() as u32,
+                    x0: m.x0,
+                    y0: m.y0,
+                    x1: m.x1,
+                    y1: m.y1,
+                    tile_mask: m.tile_mask,
+                    delay_ms: frame_delay,
+                });
             } else {
-                deltas.push((Vec::new(), 0, 0, 0, 0, 0, [0u16; TILE_ROWS]));
+                deltas.push(EncodedDelta {
+                    blob: Vec::new(),
+                    raw_len: 0,
+                    x0: 0,
+                    y0: 0,
+                    x1: 0,
+                    y1: 0,
+                    tile_mask: [0u16; TILE_ROWS],
+                    delay_ms: frame_delay,
+                });
             }
             std::mem::swap(&mut prev, &mut cur);
         }
@@ -796,10 +844,19 @@ pub fn bake_shader_loop(
         // Encode seamless wrap delta: frame (n-1) -> frame 0 (`base_rgb`)!
         if let Some(m) = pack_planar_delta(&prev, &base_rgb, w, h, &mut raw_delta) {
             let comp = lz4_compress(&raw_delta);
-            deltas[0] = (comp, raw_delta.len() as u32, m.x0, m.y0, m.x1, m.y1, m.tile_mask);
+            deltas[0] = EncodedDelta {
+                blob: comp,
+                raw_len: raw_delta.len() as u32,
+                x0: m.x0,
+                y0: m.y0,
+                x1: m.x1,
+                y1: m.y1,
+                tile_mask: m.tile_mask,
+                delay_ms: frame_delay,
+            };
         }
 
-        match write_mwa_atomic(out_mwa, fw, fh, fps, src_hash, &base_rgb, &deltas) {
+        match write_mwa_atomic(out_mwa, fw, fh, fps, 0, src_hash, &base_rgb, &deltas) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("misa-wall baker: {e}");
@@ -807,4 +864,1001 @@ pub fn bake_shader_loop(
             }
         }
     }
+}
+
+// ============================================================================
+// User-supplied live wallpaper detection & baking (GIF, WebP, APNG, Video)
+// Inspired by awww: per-frame variable delays, duplicate-frame coalescing,
+// wraparound deltas, and zero decoder libraries loaded in the persistent daemon!
+// ============================================================================
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnimKind {
+    AnimatedGif,
+    AnimatedWebp,
+    AnimatedPng,
+    Video,
+}
+
+pub fn is_video_ext(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "mp4" | "webm" | "mkv" | "mov" | "m4v"
+    )
+}
+
+#[inline]
+fn read_byte<R: Read>(r: &mut R) -> Option<u8> {
+    let mut b = [0u8; 1];
+    if r.read_exact(&mut b).is_ok() { Some(b[0]) } else { None }
+}
+
+/// Streaming pure-Rust GIF block walker using an 8 KB `BufReader` (0 full-file RAM!).
+/// Stops early once `stop_at` frames are seen (e.g. `Some(2)` for <0.05 ms detection).
+pub fn gif_frame_count_limit(path: &Path, stop_at: Option<usize>) -> Option<usize> {
+    let file = File::open(path).ok()?;
+    let mut r = BufReader::with_capacity(8192, file);
+    let mut hdr = [0u8; 13];
+    r.read_exact(&mut hdr).ok()?;
+    if &hdr[0..6] != b"GIF87a" && &hdr[0..6] != b"GIF89a" {
+        return None;
+    }
+    let packed = hdr[10];
+    if (packed & 0x80) != 0 {
+        let gct = 3i64 << ((packed & 0x07) + 1);
+        r.seek(SeekFrom::Current(gct)).ok()?;
+    }
+    let mut frames = 0usize;
+    while let Some(tag) = read_byte(&mut r) {
+        match tag {
+            0x3B => break, // trailer
+            0x00 => {}
+            0x21 => {
+                // Extension block: skip 1-byte label + sub-blocks until 0x00
+                let _ = read_byte(&mut r)?;
+                while let Some(sz) = read_byte(&mut r) {
+                    if sz == 0 {
+                        break;
+                    }
+                    if r.seek(SeekFrom::Current(sz as i64)).is_err() {
+                        return Some(frames);
+                    }
+                }
+            }
+            0x2C => {
+                // Image Descriptor: 9 bytes following 0x2C
+                frames += 1;
+                if let Some(lim) = stop_at {
+                    if frames >= lim {
+                        return Some(frames);
+                    }
+                }
+                let mut desc = [0u8; 9];
+                if r.read_exact(&mut desc).is_err() {
+                    break;
+                }
+                let ipacked = desc[8];
+                if (ipacked & 0x80) != 0 {
+                    let lct = 3i64 << ((ipacked & 0x07) + 1);
+                    if r.seek(SeekFrom::Current(lct)).is_err() {
+                        break;
+                    }
+                }
+                if read_byte(&mut r).is_none() {
+                    break; // LZW minimum code size
+                }
+                while let Some(sz) = read_byte(&mut r) {
+                    if sz == 0 {
+                        break;
+                    }
+                    if r.seek(SeekFrom::Current(sz as i64)).is_err() {
+                        return Some(frames);
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    Some(frames)
+}
+
+/// Pure-Rust WebP RIFF header check for `VP8X` animation bit or `ANIM` chunk.
+pub fn webp_is_animated(path: &Path) -> bool {
+    let Ok(mut f) = File::open(path) else {
+        return false;
+    };
+    let mut buf = vec![0u8; 65536];
+    let n = f.read(&mut buf).unwrap_or(0);
+    if n < 20 || &buf[0..4] != b"RIFF" || &buf[8..12] != b"WEBP" {
+        return false;
+    }
+    let mut p = 12usize;
+    while p + 8 <= n {
+        let tag = &buf[p..p + 4];
+        let clen = u32::from_le_bytes(buf[p + 4..p + 8].try_into().unwrap()) as usize;
+        if tag == b"VP8X" && p + 9 <= n {
+            if (buf[p + 8] & 0x02) != 0 {
+                return true;
+            }
+        } else if tag == b"ANIM" {
+            return true;
+        }
+        let step = 8usize.saturating_add(clen).saturating_add(clen & 1);
+        if step == 0 || p.saturating_add(step) > n {
+            break;
+        }
+        p += step;
+    }
+    false
+}
+
+/// Pure-Rust PNG chunk scanner for `acTL` (APNG) with `num_frames > 1`.
+pub fn png_is_animated(path: &Path) -> bool {
+    let Ok(mut f) = File::open(path) else {
+        return false;
+    };
+    let mut buf = vec![0u8; 65536];
+    let n = f.read(&mut buf).unwrap_or(0);
+    if n < 24 || &buf[0..8] != b"\x89PNG\r\n\x1a\n" {
+        return false;
+    }
+    let mut p = 8usize;
+    while p + 12 <= n {
+        let clen = u32::from_be_bytes(buf[p..p + 4].try_into().unwrap()) as usize;
+        let ctype = &buf[p + 4..p + 8];
+        if ctype == b"acTL" && clen >= 4 && p + 12 <= n {
+            let num_frames = u32::from_be_bytes(buf[p + 8..p + 12].try_into().unwrap());
+            return num_frames > 1;
+        }
+        if ctype == b"IDAT" || ctype == b"IEND" {
+            break;
+        }
+        let step = 12usize.saturating_add(clen);
+        if step == 0 || p.saturating_add(step) > n {
+            break;
+        }
+        p += step;
+    }
+    false
+}
+
+/// Detect whether `path` is a user-supplied animated wallpaper (GIF, animated WebP,
+/// APNG, or video loop).
+pub fn detect_media_anim(path: &Path) -> Option<AnimKind> {
+    if std::env::var("MISA_WALL_LIVE").ok().as_deref() == Some("0") {
+        return None;
+    }
+    if is_video_ext(path) {
+        return Some(AnimKind::Video);
+    }
+    let mut magic = [0u8; 16];
+    let mut f = File::open(path).ok()?;
+    let n = f.read(&mut magic).ok()?;
+    if n >= 6 && (&magic[0..6] == b"GIF87a" || &magic[0..6] == b"GIF89a") {
+        if gif_frame_count_limit(path, Some(2)).unwrap_or(0) > 1 {
+            return Some(AnimKind::AnimatedGif);
+        }
+        return None;
+    }
+    if n >= 12 && &magic[0..4] == b"RIFF" && &magic[8..12] == b"WEBP" {
+        if webp_is_animated(path) {
+            return Some(AnimKind::AnimatedWebp);
+        }
+        return None;
+    }
+    if n >= 8 && &magic[0..8] == b"\x89PNG\r\n\x1a\n" {
+        if png_is_animated(path) {
+            return Some(AnimKind::AnimatedPng);
+        }
+        return None;
+    }
+    None
+}
+
+fn choose_media_dims(
+    sw: u32,
+    sh: u32,
+    max_w: u32,
+    max_h: u32,
+    force_nearest: bool,
+) -> (u32, u32, u32) {
+    let sw = sw.max(2);
+    let sh = sh.max(2);
+    let scale = (max_w as f64 / sw as f64)
+        .min(max_h as f64 / sh as f64)
+        .min(1.0);
+    let dw = (((sw as f64 * scale).round() as u32).max(2) & !1).max(2);
+    let dh = (((sh as f64 * scale).round() as u32).max(2) & !1).max(2);
+    let flags = if force_nearest || (sw <= 320 && sh <= 240) {
+        0
+    } else {
+        MWA_FLAG_LINEAR
+    };
+    (dw, dh, flags)
+}
+
+/// Reusable bilinear coordinate LUT built once per animation bake (zero per-frame trig/float!).
+struct ScaleLut {
+    sw: usize,
+    sh: usize,
+    ch: usize,
+    dw: usize,
+    dh: usize,
+    x0: Vec<usize>,
+    x1: Vec<usize>,
+    wx: Vec<u32>,
+    y0: Vec<usize>,
+    y1: Vec<usize>,
+    wy: Vec<u32>,
+}
+
+impl ScaleLut {
+    fn new(sw: usize, sh: usize, ch: usize, dw: usize, dh: usize) -> Self {
+        let mut x0 = Vec::with_capacity(dw);
+        let mut x1 = Vec::with_capacity(dw);
+        let mut wx = Vec::with_capacity(dw);
+        let xs = (sw as f64) / (dw as f64);
+        for x in 0..dw {
+            let fx = ((x as f64 + 0.5) * xs - 0.5).clamp(0.0, (sw - 1) as f64);
+            let i0 = fx.floor() as usize;
+            let i1 = (i0 + 1).min(sw - 1);
+            x0.push(i0 * ch);
+            x1.push(i1 * ch);
+            wx.push(((fx - i0 as f64) * 256.0).round() as u32);
+        }
+        let mut y0 = Vec::with_capacity(dh);
+        let mut y1 = Vec::with_capacity(dh);
+        let mut wy = Vec::with_capacity(dh);
+        let ys = (sh as f64) / (dh as f64);
+        for y in 0..dh {
+            let fy = ((y as f64 + 0.5) * ys - 0.5).clamp(0.0, (sh - 1) as f64);
+            let j0 = fy.floor() as usize;
+            let j1 = (j0 + 1).min(sh - 1);
+            y0.push(j0);
+            y1.push(j1);
+            wy.push(((fy - j0 as f64) * 256.0).round() as u32);
+        }
+        Self { sw, sh, ch, dw, dh, x0, x1, wx, y0, y1, wy }
+    }
+
+    /// Specialized RGB / RGBA-with-opaque-fast-path bilinear scaler (~3-4x faster).
+    fn scale_into(&self, src: &[u8], rowstride: usize, out: &mut [u8]) {
+        let dw = self.dw;
+        let dh = self.dh;
+        if self.sw == dw && self.sh == dh {
+            if self.ch == 3 {
+                for y in 0..dh {
+                    out[y * dw * 3..(y + 1) * dw * 3]
+                        .copy_from_slice(&src[y * rowstride..y * rowstride + dw * 3]);
+                }
+            } else {
+                for y in 0..dh {
+                    let s_row = &src[y * rowstride..];
+                    let d_row = &mut out[y * dw * 3..(y + 1) * dw * 3];
+                    for x in 0..dw {
+                        let so = x * 4;
+                        let a = s_row[so + 3] as u32;
+                        if a == 255 {
+                            d_row[x * 3] = s_row[so];
+                            d_row[x * 3 + 1] = s_row[so + 1];
+                            d_row[x * 3 + 2] = s_row[so + 2];
+                        } else if a == 0 {
+                            d_row[x * 3] = 0;
+                            d_row[x * 3 + 1] = 0;
+                            d_row[x * 3 + 2] = 0;
+                        } else {
+                            // Fast exact /255: (v * a + 128 + ((v * a + 128) >> 8)) >> 8
+                            for c in 0..3 {
+                                let t = s_row[so + c] as u32 * a + 128;
+                                d_row[x * 3 + c] = ((t + (t >> 8)) >> 8) as u8;
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        if self.ch == 3 {
+            for y in 0..dh {
+                let wy = self.wy[y];
+                let iy = 256 - wy;
+                let r0 = &src[self.y0[y] * rowstride..];
+                let r1 = &src[self.y1[y] * rowstride..];
+                let d_row = &mut out[y * dw * 3..(y + 1) * dw * 3];
+                for x in 0..dw {
+                    let o0 = self.x0[x];
+                    let o1 = self.x1[x];
+                    let wx = self.wx[x];
+                    let ix = 256 - wx;
+                    let w00 = ix * iy;
+                    let w10 = wx * iy;
+                    let w01 = ix * wy;
+                    let w11 = wx * wy;
+                    d_row[x * 3] = ((r0[o0] as u32 * w00 + r0[o1] as u32 * w10 + r1[o0] as u32 * w01 + r1[o1] as u32 * w11 + 32768) >> 16) as u8;
+                    d_row[x * 3 + 1] = ((r0[o0 + 1] as u32 * w00 + r0[o1 + 1] as u32 * w10 + r1[o0 + 1] as u32 * w01 + r1[o1 + 1] as u32 * w11 + 32768) >> 16) as u8;
+                    d_row[x * 3 + 2] = ((r0[o0 + 2] as u32 * w00 + r0[o1 + 2] as u32 * w10 + r1[o0 + 2] as u32 * w01 + r1[o1 + 2] as u32 * w11 + 32768) >> 16) as u8;
+                }
+            }
+        } else {
+            for y in 0..dh {
+                let wy = self.wy[y];
+                let iy = 256 - wy;
+                let r0 = &src[self.y0[y] * rowstride..];
+                let r1 = &src[self.y1[y] * rowstride..];
+                let d_row = &mut out[y * dw * 3..(y + 1) * dw * 3];
+                for x in 0..dw {
+                    let o0 = self.x0[x];
+                    let o1 = self.x1[x];
+                    let wx = self.wx[x];
+                    let ix = 256 - wx;
+                    let w00 = ix * iy;
+                    let w10 = wx * iy;
+                    let w01 = ix * wy;
+                    let w11 = wx * wy;
+                    let a00 = r0[o0 + 3];
+                    let a10 = r0[o1 + 3];
+                    let a01 = r1[o0 + 3];
+                    let a11 = r1[o1 + 3];
+                    if (a00 & a10 & a01 & a11) == 255 {
+                        d_row[x * 3] = ((r0[o0] as u32 * w00 + r0[o1] as u32 * w10 + r1[o0] as u32 * w01 + r1[o1] as u32 * w11 + 32768) >> 16) as u8;
+                        d_row[x * 3 + 1] = ((r0[o0 + 1] as u32 * w00 + r0[o1 + 1] as u32 * w10 + r1[o0 + 1] as u32 * w01 + r1[o1 + 1] as u32 * w11 + 32768) >> 16) as u8;
+                        d_row[x * 3 + 2] = ((r0[o0 + 2] as u32 * w00 + r0[o1 + 2] as u32 * w10 + r1[o0 + 2] as u32 * w01 + r1[o1 + 2] as u32 * w11 + 32768) >> 16) as u8;
+                    } else {
+                        let premul = |v: u8, a: u8| -> u32 {
+                            let t = v as u32 * a as u32 + 128;
+                            (t + (t >> 8)) >> 8
+                        };
+                        for c in 0..3 {
+                            let p00 = premul(r0[o0 + c], a00);
+                            let p10 = premul(r0[o1 + c], a10);
+                            let p01 = premul(r1[o0 + c], a01);
+                            let p11 = premul(r1[o1 + c], a11);
+                            d_row[x * 3 + c] = ((p00 * w00 + p10 * w10 + p01 * w01 + p11 * w11 + 32768) >> 16) as u8;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn scale_to_rgb(
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+    rowstride: usize,
+    ch: usize,
+    dw: usize,
+    dh: usize,
+    out: &mut [u8],
+) {
+    ScaleLut::new(sw, sh, ch, dw, dh).scale_into(src, rowstride, out);
+}
+
+/// Streaming planar-delta MWA3 encoder with `awww`-style duplicate-frame coalescing.
+struct MediaFrameEncoder {
+    w: usize,
+    h: usize,
+    base_rgb: Vec<u8>,
+    prev_rgb: Vec<u8>,
+    deltas: Vec<EncodedDelta>,
+    raw_delta: Vec<u8>,
+    has_base: bool,
+}
+
+impl MediaFrameEncoder {
+    fn new(w: u32, h: u32) -> Self {
+        let n = (w as usize) * (h as usize) * 3;
+        Self {
+            w: w as usize,
+            h: h as usize,
+            base_rgb: Vec::new(),
+            prev_rgb: Vec::new(),
+            deltas: Vec::new(),
+            raw_delta: Vec::with_capacity(n / 2),
+            has_base: false,
+        }
+    }
+
+    fn push_frame(&mut self, rgb: &[u8], delay_ms: u16) {
+        let d = delay_ms.max(16);
+        if !self.has_base {
+            self.base_rgb = rgb.to_vec();
+            self.prev_rgb = rgb.to_vec();
+            // Slot 0 stores the wraparound delta (last -> frame 0) and frame 0's delay.
+            self.deltas.push(EncodedDelta {
+                blob: Vec::new(),
+                raw_len: 0,
+                x0: 0,
+                y0: 0,
+                x1: 0,
+                y1: 0,
+                tile_mask: [0u16; TILE_ROWS],
+                delay_ms: d,
+            });
+            self.has_base = true;
+            return;
+        }
+        if let Some(m) = pack_planar_delta(&self.prev_rgb, rgb, self.w, self.h, &mut self.raw_delta) {
+            let comp = lz4_compress(&self.raw_delta);
+            self.deltas.push(EncodedDelta {
+                blob: comp,
+                raw_len: self.raw_delta.len() as u32,
+                x0: m.x0,
+                y0: m.y0,
+                x1: m.x1,
+                y1: m.y1,
+                tile_mask: m.tile_mask,
+                delay_ms: d,
+            });
+            self.prev_rgb.copy_from_slice(rgb);
+        } else if let Some(last) = self.deltas.last_mut() {
+            // Coalesce identical consecutive frame (awww optimization): sum duration!
+            last.delay_ms = last.delay_ms.saturating_add(d);
+        }
+    }
+
+    fn finish(mut self, out_mwa: &Path, flags: u32, src_hash: u64) -> Result<(), String> {
+        if self.deltas.len() <= 1 {
+            return Err("animation has only 1 unique frame".into());
+        }
+        // Encode seamless wraparound delta: last unique frame -> frame 0 (`base_rgb`).
+        if let Some(m) = pack_planar_delta(&self.prev_rgb, &self.base_rgb, self.w, self.h, &mut self.raw_delta) {
+            let comp = lz4_compress(&self.raw_delta);
+            let f0_delay = self.deltas[0].delay_ms;
+            self.deltas[0] = EncodedDelta {
+                blob: comp,
+                raw_len: self.raw_delta.len() as u32,
+                x0: m.x0,
+                y0: m.y0,
+                x1: m.x1,
+                y1: m.y1,
+                tile_mask: m.tile_mask,
+                delay_ms: f0_delay,
+            };
+        } else if self.deltas.len() > 2 {
+            // Last frame is identical to frame 0: merge its duration into frame 0 and drop duplicate tail!
+            let tail = self.deltas.pop().unwrap();
+            self.deltas[0].delay_ms = self.deltas[0].delay_ms.saturating_add(tail.delay_ms);
+        }
+
+        let total_ms: u64 = self.deltas.iter().map(|d| d.delay_ms.max(16) as u64).sum();
+        let avg_ms = (total_ms / self.deltas.len() as u64).max(16);
+        let nominal_fps = ((1000 + avg_ms / 2) / avg_ms).clamp(1, 60) as u32;
+
+        write_mwa_atomic(
+            out_mwa,
+            self.w as u32,
+            self.h as u32,
+            nominal_fps,
+            flags,
+            src_hash,
+            &self.base_rgb,
+            &self.deltas,
+        )
+    }
+}
+
+// --- Native Animated WebP decoder via lazy dlopen(libwebpdemux.so.2) ---
+
+const WEBP_DEMUX_ABI_VERSION: c_int = 0x0107;
+
+#[repr(C)]
+struct WebPData {
+    bytes: *const u8,
+    size: usize,
+}
+
+#[repr(C)]
+struct WebPAnimInfo {
+    canvas_width: u32,
+    canvas_height: u32,
+    loop_count: u32,
+    bgcolor: u32,
+    frame_count: u32,
+    pad: [u32; 4],
+}
+
+type FnWebPAnimDecoderNewInternal =
+    unsafe extern "C" fn(*const WebPData, *const c_void, c_int) -> *mut c_void;
+type FnWebPAnimDecoderGetInfo = unsafe extern "C" fn(*const c_void, *mut WebPAnimInfo) -> c_int;
+type FnWebPAnimDecoderHasMoreFrames = unsafe extern "C" fn(*const c_void) -> c_int;
+type FnWebPAnimDecoderGetNext =
+    unsafe extern "C" fn(*mut c_void, *mut *mut u8, *mut c_int) -> c_int;
+type FnWebPAnimDecoderDelete = unsafe extern "C" fn(*mut c_void);
+
+unsafe fn bake_webp_native(
+    path: &Path,
+    out_mwa: &Path,
+    src_hash: u64,
+    max_w: u32,
+    max_h: u32,
+    max_frames: u32,
+    force_nearest: bool,
+) -> Result<(), String> {
+    let mut lib = null_mut();
+    for soname in ["libwebpdemux.so.2", "libwebpdemux.so"] {
+        let cs = CString::new(soname).unwrap();
+        lib = dlopen(cs.as_ptr(), RTLD_LAZY | RTLD_LOCAL);
+        if !lib.is_null() {
+            break;
+        }
+    }
+    if lib.is_null() {
+        return Err("libwebpdemux unavailable".into());
+    }
+    macro_rules! sym {
+        ($n:expr, $t:ty) => {{
+            let cs = CString::new($n).unwrap();
+            let p = dlsym(lib, cs.as_ptr());
+            if p.is_null() {
+                return Err(concat!("missing ", $n).into());
+            }
+            std::mem::transmute::<*mut c_void, $t>(p)
+        }};
+    }
+    let dec_new: FnWebPAnimDecoderNewInternal =
+        sym!("WebPAnimDecoderNewInternal", FnWebPAnimDecoderNewInternal);
+    let dec_info: FnWebPAnimDecoderGetInfo =
+        sym!("WebPAnimDecoderGetInfo", FnWebPAnimDecoderGetInfo);
+    let dec_more: FnWebPAnimDecoderHasMoreFrames =
+        sym!("WebPAnimDecoderHasMoreFrames", FnWebPAnimDecoderHasMoreFrames);
+    let dec_next: FnWebPAnimDecoderGetNext =
+        sym!("WebPAnimDecoderGetNext", FnWebPAnimDecoderGetNext);
+    let dec_del: FnWebPAnimDecoderDelete =
+        sym!("WebPAnimDecoderDelete", FnWebPAnimDecoderDelete);
+
+    let raw = fs::read(path).map_err(|e| format!("read webp: {e}"))?;
+    let wdata = WebPData {
+        bytes: raw.as_ptr(),
+        size: raw.len(),
+    };
+    // Passing NULL options selects MODE_RGBA cleanly regardless of enum values.
+    let dec = dec_new(&wdata, null(), WEBP_DEMUX_ABI_VERSION);
+    if dec.is_null() {
+        return Err("WebPAnimDecoderNew failed".into());
+    }
+    let mut info = WebPAnimInfo {
+        canvas_width: 0,
+        canvas_height: 0,
+        loop_count: 0,
+        bgcolor: 0,
+        frame_count: 0,
+        pad: [0; 4],
+    };
+    if dec_info(dec, &mut info) == 0 || info.canvas_width == 0 || info.canvas_height == 0 || info.frame_count <= 1 {
+        dec_del(dec);
+        return Err("not an animated webp".into());
+    }
+
+    let sw = info.canvas_width as usize;
+    let sh = info.canvas_height as usize;
+    let (dw, dh, flags) = choose_media_dims(info.canvas_width, info.canvas_height, max_w, max_h, force_nearest);
+    let lut = ScaleLut::new(sw, sh, 4, dw as usize, dh as usize);
+    let mut enc = MediaFrameEncoder::new(dw, dh);
+    let mut rgb = vec![0u8; (dw as usize) * (dh as usize) * 3];
+    let mut prev_ts: c_int = 0;
+    let mut count = 0u32;
+
+    while dec_more(dec) != 0 && count < max_frames {
+        let mut buf_ptr: *mut u8 = null_mut();
+        let mut ts: c_int = 0;
+        if dec_next(dec, &mut buf_ptr, &mut ts) == 0 || buf_ptr.is_null() {
+            break;
+        }
+        let delay = (ts - prev_ts).clamp(20, 10_000) as u16;
+        prev_ts = ts;
+        let rgba = std::slice::from_raw_parts(buf_ptr, sw * sh * 4);
+        lut.scale_into(rgba, sw * 4, &mut rgb);
+        enc.push_frame(&rgb, delay);
+        count += 1;
+    }
+    dec_del(dec);
+    enc.finish(out_mwa, flags, src_hash)
+}
+
+// --- Native Animated GIF decoder via lazy dlopen(libgdk_pixbuf-2.0.so.0) ---
+
+#[repr(C)]
+struct GTimeVal {
+    tv_sec: c_long,
+    tv_usec: c_long,
+}
+
+type FnAnimNewFromFile = unsafe extern "C" fn(*const c_char, *mut *mut c_void) -> *mut c_void;
+type FnAnimIsStatic = unsafe extern "C" fn(*mut c_void) -> c_int;
+type FnAnimGetInt = unsafe extern "C" fn(*mut c_void) -> c_int;
+type FnAnimGetIter = unsafe extern "C" fn(*mut c_void, *const GTimeVal) -> *mut c_void;
+type FnIterGetDelay = unsafe extern "C" fn(*mut c_void) -> c_int;
+type FnIterGetPixbuf = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+type FnIterAdvance = unsafe extern "C" fn(*mut c_void, *const GTimeVal) -> c_int;
+type FnPbGetInt = unsafe extern "C" fn(*const c_void) -> c_int;
+type FnPbGetPixels = unsafe extern "C" fn(*const c_void) -> *const c_uchar;
+type FnObjUnref = unsafe extern "C" fn(*mut c_void);
+
+unsafe fn bake_gif_native(
+    path: &Path,
+    out_mwa: &Path,
+    src_hash: u64,
+    max_w: u32,
+    max_h: u32,
+    max_frames: u32,
+    force_nearest: bool,
+) -> Result<(), String> {
+    let total_frames = gif_frame_count_limit(path, Some(max_frames as usize))
+        .filter(|&n| n > 1)
+        .ok_or_else(|| "GIF has <= 1 frame".to_string())?
+        .min(max_frames as usize);
+
+    let mut lib_pb = null_mut();
+    for soname in ["libgdk_pixbuf-2.0.so.0", "libgdk_pixbuf-2.0.so"] {
+        let cs = CString::new(soname).unwrap();
+        lib_pb = dlopen(cs.as_ptr(), RTLD_LAZY | RTLD_LOCAL);
+        if !lib_pb.is_null() {
+            break;
+        }
+    }
+    if lib_pb.is_null() {
+        return Err("libgdk_pixbuf unavailable".into());
+    }
+    let mut lib_go = null_mut();
+    for soname in ["libgobject-2.0.so.0", "libgobject-2.0.so"] {
+        let cs = CString::new(soname).unwrap();
+        lib_go = dlopen(cs.as_ptr(), RTLD_LAZY | RTLD_LOCAL);
+        if !lib_go.is_null() {
+            break;
+        }
+    }
+    if lib_go.is_null() {
+        lib_go = lib_pb;
+    }
+
+    macro_rules! sym {
+        ($lib:expr, $n:expr, $t:ty) => {{
+            let cs = CString::new($n).unwrap();
+            let p = dlsym($lib, cs.as_ptr());
+            if p.is_null() {
+                return Err(concat!("missing ", $n).into());
+            }
+            std::mem::transmute::<*mut c_void, $t>(p)
+        }};
+    }
+
+    let anim_new: FnAnimNewFromFile = sym!(lib_pb, "gdk_pixbuf_animation_new_from_file", FnAnimNewFromFile);
+    let anim_static: FnAnimIsStatic = sym!(lib_pb, "gdk_pixbuf_animation_is_static_image", FnAnimIsStatic);
+    let anim_w: FnAnimGetInt = sym!(lib_pb, "gdk_pixbuf_animation_get_width", FnAnimGetInt);
+    let anim_h: FnAnimGetInt = sym!(lib_pb, "gdk_pixbuf_animation_get_height", FnAnimGetInt);
+    let anim_iter: FnAnimGetIter = sym!(lib_pb, "gdk_pixbuf_animation_get_iter", FnAnimGetIter);
+    let iter_delay: FnIterGetDelay = sym!(lib_pb, "gdk_pixbuf_animation_iter_get_delay_time", FnIterGetDelay);
+    let iter_pb: FnIterGetPixbuf = sym!(lib_pb, "gdk_pixbuf_animation_iter_get_pixbuf", FnIterGetPixbuf);
+    let iter_adv: FnIterAdvance = sym!(lib_pb, "gdk_pixbuf_animation_iter_advance", FnIterAdvance);
+    let pb_w: FnPbGetInt = sym!(lib_pb, "gdk_pixbuf_get_width", FnPbGetInt);
+    let pb_h: FnPbGetInt = sym!(lib_pb, "gdk_pixbuf_get_height", FnPbGetInt);
+    let pb_rs: FnPbGetInt = sym!(lib_pb, "gdk_pixbuf_get_rowstride", FnPbGetInt);
+    let pb_ch: FnPbGetInt = sym!(lib_pb, "gdk_pixbuf_get_n_channels", FnPbGetInt);
+    let pb_px: FnPbGetPixels = sym!(lib_pb, "gdk_pixbuf_get_pixels", FnPbGetPixels);
+    let unref: FnObjUnref = sym!(lib_go, "g_object_unref", FnObjUnref);
+
+    let c_path = CString::new(path.to_string_lossy().as_bytes()).map_err(|_| "bad path")?;
+    let anim = anim_new(c_path.as_ptr(), null_mut());
+    if anim.is_null() {
+        return Err("gdk_pixbuf_animation_new_from_file failed".into());
+    }
+    if anim_static(anim) != 0 {
+        unref(anim);
+        return Err("GIF reported static".into());
+    }
+    let aw = anim_w(anim);
+    let ah = anim_h(anim);
+    if aw <= 0 || ah <= 0 {
+        unref(anim);
+        return Err("invalid GIF dimensions".into());
+    }
+    let (dw, dh, flags) = choose_media_dims(aw as u32, ah as u32, max_w, max_h, force_nearest);
+    let mut enc = MediaFrameEncoder::new(dw, dh);
+    let mut rgb = vec![0u8; (dw as usize) * (dh as usize) * 3];
+
+    let mut tv = GTimeVal { tv_sec: 1, tv_usec: 0 };
+    let iter = anim_iter(anim, &tv);
+    if iter.is_null() {
+        unref(anim);
+        return Err("gdk_pixbuf_animation_get_iter failed".into());
+    }
+
+    let mut cached_lut: Option<ScaleLut> = None;
+    for f in 0..total_frames {
+        let raw_delay = iter_delay(iter);
+        let delay_ms = if raw_delay < 0 {
+            100u16
+        } else if raw_delay == 0 {
+            40u16
+        } else {
+            (raw_delay as u32).clamp(20, 10_000) as u16
+        };
+        let pb = iter_pb(iter);
+        if !pb.is_null() {
+            let sw = pb_w(pb) as usize;
+            let sh = pb_h(pb) as usize;
+            let rs = pb_rs(pb) as usize;
+            let ch = pb_ch(pb) as usize;
+            let px = pb_px(pb);
+            if sw > 0 && sh > 0 && (ch == 3 || ch == 4) && !px.is_null() {
+                let slice = std::slice::from_raw_parts(px, rs * sh);
+                let need_new = cached_lut
+                    .as_ref()
+                    .map(|l| l.sw != sw || l.sh != sh || l.ch != ch)
+                    .unwrap_or(true);
+                if need_new {
+                    cached_lut = Some(ScaleLut::new(sw, sh, ch, dw as usize, dh as usize));
+                }
+                cached_lut.as_ref().unwrap().scale_into(slice, rs, &mut rgb);
+                enc.push_frame(&rgb, delay_ms);
+            }
+        }
+        if raw_delay < 0 {
+            break;
+        }
+        if f + 1 < total_frames {
+            let step_ms = if raw_delay > 0 { raw_delay as c_long } else { 20 };
+            tv.tv_usec += step_ms * 1000;
+            tv.tv_sec += tv.tv_usec / 1_000_000;
+            tv.tv_usec %= 1_000_000;
+            let _ = iter_adv(iter, &tv);
+        }
+    }
+
+    unref(iter);
+    unref(anim);
+    enc.finish(out_mwa, flags, src_hash)
+}
+
+// --- FFmpeg streaming decoder for APNG, video loops (MP4/WebM/MKV/MOV), & fallback ---
+
+fn probe_media_size(path: &Path) -> Option<(u32, u32)> {
+    let out = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0:s=x",
+        ])
+        .arg(path)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    let line = s.lines().next()?.trim();
+    let (ws, hs) = line.split_once('x')?;
+    let w: u32 = ws.trim().parse().ok()?;
+    let h: u32 = hs.trim().parse().ok()?;
+    if w >= 2 && h >= 2 {
+        Some((w, h))
+    } else {
+        None
+    }
+}
+
+fn bake_ffmpeg_stream(
+    path: &Path,
+    out_mwa: &Path,
+    src_hash: u64,
+    max_w: u32,
+    max_h: u32,
+    max_fps: u32,
+    max_frames: u32,
+    force_nearest: bool,
+) -> Result<(), String> {
+    let (sw, sh) = probe_media_size(path).unwrap_or((max_w, max_h));
+    let (dw, dh, flags) = choose_media_dims(sw, sh, max_w, max_h, force_nearest);
+    let fps = max_fps.clamp(6, 20);
+    let delay_ms = ((1000 + fps / 2) / fps).clamp(16, 1000) as u16;
+    let scale_flags = if dw < sw || dh < sh { "area" } else { "bilinear" };
+    let vf = format!("fps={fps},scale={dw}:{dh}:flags={scale_flags}");
+
+    let mut child = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-i"])
+        .arg(path)
+        .args([
+            "-an",
+            "-sn",
+            "-dn",
+            "-vf",
+            &vf,
+            "-frames:v",
+            &max_frames.to_string(),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn ffmpeg: {e}"))?;
+
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "ffmpeg stdout unavailable".to_string())?;
+    let frame_bytes = (dw as usize) * (dh as usize) * 3;
+    let mut rgb = vec![0u8; frame_bytes];
+    let mut enc = MediaFrameEncoder::new(dw, dh);
+    let mut count = 0u32;
+
+    while count < max_frames {
+        match stdout.read_exact(&mut rgb) {
+            Ok(()) => {
+                enc.push_frame(&rgb, delay_ms);
+                count += 1;
+            }
+            Err(_) => break,
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    enc.finish(out_mwa, flags, src_hash)
+}
+
+/// One-shot user animated media baker (`--bake-media`).
+/// Supports Animated GIF, Animated WebP, APNG, and video loops (MP4/WebM/MKV/MOV).
+pub fn bake_media_loop(
+    media_path: &str,
+    out_mwa: &Path,
+    src_hash: u64,
+    max_w: u32,
+    max_h: u32,
+    max_fps: u32,
+    max_frames: u32,
+    force_nearest: bool,
+) -> i32 {
+    let path = Path::new(media_path);
+    let Some(kind) = detect_media_anim(path) else {
+        return 1;
+    };
+    let res = match kind {
+        AnimKind::AnimatedWebp => unsafe {
+            bake_webp_native(path, out_mwa, src_hash, max_w, max_h, max_frames, force_nearest)
+                .or_else(|_| {
+                    bake_ffmpeg_stream(path, out_mwa, src_hash, max_w, max_h, max_fps, max_frames, force_nearest)
+                })
+        },
+        AnimKind::AnimatedGif => unsafe {
+            bake_gif_native(path, out_mwa, src_hash, max_w, max_h, max_frames, force_nearest)
+                .or_else(|_| {
+                    bake_ffmpeg_stream(path, out_mwa, src_hash, max_w, max_h, max_fps, max_frames, force_nearest)
+                })
+        },
+        AnimKind::AnimatedPng | AnimKind::Video => {
+            bake_ffmpeg_stream(path, out_mwa, src_hash, max_w, max_h, max_fps, max_frames, force_nearest)
+        }
+    };
+    match res {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("misa-wall media baker: {e}");
+            1
+        }
+    }
+}
+
+/// Extract a cover-cropped `tw x th` first-frame thumbnail as atomic P6 PPM (`--thumb`).
+/// Used by `CardPicker` and `SddmBackground` for video loops and fallback media.
+pub fn bake_media_thumb(media_path: &str, out_ppm: &str, tw: u32, th: u32) -> i32 {
+    let tw = tw.clamp(16, 1920);
+    let th = th.clamp(16, 1080);
+    let vf = format!("scale={tw}:{th}:force_original_aspect_ratio=increase,crop={tw}:{th}");
+    let frame_bytes = (tw as usize) * (th as usize) * 3;
+
+    let mut rgb = vec![0u8; frame_bytes];
+    let mut ok = false;
+
+    if let Ok(mut child) = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-i", media_path])
+        .args([
+            "-an", "-sn", "-dn", "-frames:v", "1", "-vf", &vf, "-f", "rawvideo", "-pix_fmt",
+            "rgb24", "-",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        if let Some(mut stdout) = child.stdout.take() {
+            ok = stdout.read_exact(&mut rgb).is_ok();
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    if !ok {
+        unsafe {
+            if let Some((sw, sh, src)) = decode_rgb_image_scaled(media_path, tw as i32 * 2, th as i32 * 2) {
+                if sw > 0 && sh > 0 {
+                    scale_to_rgb(&src, sw as usize, sh as usize, (sw as usize) * 3, 3, tw as usize, th as usize, &mut rgb);
+                    ok = true;
+                }
+            }
+        }
+    }
+
+    if !ok {
+        return 1;
+    }
+
+    let mut ppm = Vec::with_capacity(32 + frame_bytes);
+    let _ = write!(ppm, "P6\n{tw} {th}\n255\n");
+    ppm.extend_from_slice(&rgb);
+    let tmp = format!("{out_ppm}.{}.tmp", unsafe { getpid() });
+    if fs::write(&tmp, &ppm).is_ok() && fs::rename(&tmp, out_ppm).is_ok() {
+        0
+    } else {
+        let _ = fs::remove_file(&tmp);
+        1
+    }
+}
+
+/// Extract a single cover-cropped BGRX frame from a video for `--static` fallback.
+pub fn decode_video_static_bgrx(path: &str, sw: i32, sh: i32, monitors: &[crate::MonRect]) -> Option<Vec<u8>> {
+    let mut target = vec![0u8; (sw as usize) * (sh as usize) * 4];
+    let mut any = false;
+    for m in monitors {
+        let mw = m.w.max(2) as usize;
+        let mh = m.h.max(2) as usize;
+        let vf = format!("scale={mw}:{mh}:force_original_aspect_ratio=increase,crop={mw}:{mh}");
+        let Ok(mut child) = Command::new("ffmpeg")
+            .args(["-v", "error", "-nostdin", "-i", path])
+            .args([
+                "-an", "-sn", "-dn", "-frames:v", "1", "-vf", &vf, "-f", "rawvideo", "-pix_fmt",
+                "rgb24", "-",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            continue;
+        };
+        let mut rgb = vec![0u8; mw * mh * 3];
+        let got = child
+            .stdout
+            .take()
+            .map(|mut s| s.read_exact(&mut rgb).is_ok())
+            .unwrap_or(false);
+        let _ = child.kill();
+        let _ = child.wait();
+        if !got {
+            continue;
+        }
+        any = true;
+        for y in 0..m.h {
+            let dy = m.y + y;
+            if dy < 0 || dy >= sh {
+                continue;
+            }
+            let max_cols = (m.w.min(sw - m.x.max(0))).max(0) as usize;
+            let s_row = &rgb[(y as usize) * mw * 3..];
+            let dst_off = ((dy as usize) * (sw as usize) + (m.x.max(0) as usize)) * 4;
+            for x in 0..max_cols {
+                target[dst_off + x * 4] = s_row[x * 3 + 2];
+                target[dst_off + x * 4 + 1] = s_row[x * 3 + 1];
+                target[dst_off + x * 4 + 2] = s_row[x * 3];
+                target[dst_off + x * 4 + 3] = 0;
+            }
+        }
+    }
+    if any { Some(target) } else { None }
 }

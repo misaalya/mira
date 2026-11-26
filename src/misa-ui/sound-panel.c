@@ -699,6 +699,7 @@ int main(int argc, char **argv) {
     }
     if (!single()) return 0;
     close_bar_popups("sound");
+    gtk_env_lean();
     gtk_init(&argc, &argv);
     g_unix_signal_add(SIGTERM, on_term, NULL);
     build_ui();

@@ -2562,7 +2562,9 @@ void main() {
       if (!btn) return;
       if (!(await copyText(btn.dataset.copy, "Command copied"))) return;
       flashCopied(btn);
-      markInstall(installRows.indexOf(btn.closest("li")));
+      const li = btn.closest("li");
+      if (li) li.classList.add("is-done");
+      markInstall(installRows.indexOf(li));
     });
   }
   if (btnCopyInstall) {

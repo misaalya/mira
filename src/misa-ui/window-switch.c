@@ -496,6 +496,7 @@ static void build(void) {
 }
 
 int main(int argc, char **argv) {
+    gtk_env_lean();
     gtk_init(&argc, &argv);
     read_conf();
     const char *demo = g_getenv("WINDOWSWITCH_DEMO");

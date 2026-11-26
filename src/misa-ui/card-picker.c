@@ -34,15 +34,27 @@
  * The window leaves the bar uncovered (below_bar), so it never blurs.
  */
 #include "common.h"
-#include "live-gl.h"
 
+#include <fcntl.h>
+#include <gdk/gdkx.h>
+#include <glib-unix.h>
 #include <glib/gstdio.h>
+#include <X11/Xatom.h>
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <malloc.h>
 #include <math.h>
-#include <sys/stat.h>
-#include <utime.h>
+#include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <utime.h>
+#if defined(__x86_64__)
+#include <immintrin.h>
+#endif
 
 #define LIFT 16       /* px rows rise while coming in */
 #define TW 176        /* gallery thumbnail */
@@ -394,12 +406,504 @@ static const int BAYER4_RAW[4][4] = {
     {15,  7, 13,  5},
 };
 
+typedef struct {
+    Window bar;
+    Window prev_above;
+    Window prev_below;
+} RaisedBar;
+
+/* -- zero-OpenGL live media detection + MWA3 pread streaming player -------------------- */
+static char *find_sidecar_frag(const char *image_path) {
+    if (!image_path || !*image_path) return NULL;
+    const char *env = g_getenv("MISA_WALL_LIVE");
+    if (env && strcmp(env, "0") == 0) return NULL;
+    char *canon = realpath(image_path, NULL);
+    const char *base = canon ? canon : image_path;
+    const char *slash = strrchr(base, '/');
+    const char *dot = strrchr(base, '.');
+    char *out = NULL;
+    if (dot && (!slash || dot > slash)) {
+        char *stem = g_strndup(base, (gsize)(dot - base));
+        char *cand = g_strconcat(stem, ".frag", NULL);
+        g_free(stem);
+        if (g_file_test(cand, G_FILE_TEST_IS_REGULAR)) out = cand;
+        else g_free(cand);
+    }
+    free(canon);
+    return out;
+}
+
+static gboolean is_video_path(const char *path) {
+    if (!path || !*path) return FALSE;
+    const char *dot = strrchr(path, '.');
+    if (!dot) return FALSE;
+    return g_ascii_strcasecmp(dot, ".mp4") == 0 ||
+           g_ascii_strcasecmp(dot, ".webm") == 0 ||
+           g_ascii_strcasecmp(dot, ".mkv") == 0 ||
+           g_ascii_strcasecmp(dot, ".mov") == 0 ||
+           g_ascii_strcasecmp(dot, ".m4v") == 0;
+}
+
+static gboolean gif_is_animated_file(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return FALSE;
+    unsigned char hdr[13];
+    if (fread(hdr, 1, 13, fp) != 13 ||
+        (memcmp(hdr, "GIF87a", 6) != 0 && memcmp(hdr, "GIF89a", 6) != 0)) {
+        fclose(fp);
+        return FALSE;
+    }
+    if (hdr[10] & 0x80) {
+        long gct = 3L << ((hdr[10] & 7) + 1);
+        if (fseek(fp, gct, SEEK_CUR) != 0) { fclose(fp); return FALSE; }
+    }
+    int frames = 0;
+    for (;;) {
+        int c = fgetc(fp);
+        if (c == EOF || c == 0x3B) break;
+        if (c == 0x00) continue;
+        if (c == 0x21) {
+            if (fgetc(fp) == EOF) break;
+            for (;;) {
+                int sz = fgetc(fp);
+                if (sz <= 0) break;
+                if (fseek(fp, sz, SEEK_CUR) != 0) { fclose(fp); return frames >= 2; }
+            }
+        } else if (c == 0x2C) {
+            if (++frames >= 2) { fclose(fp); return TRUE; }
+            unsigned char desc[9];
+            if (fread(desc, 1, 9, fp) != 9) break;
+            if (desc[8] & 0x80) {
+                long lct = 3L << ((desc[8] & 7) + 1);
+                if (fseek(fp, lct, SEEK_CUR) != 0) break;
+            }
+            if (fgetc(fp) == EOF) break;
+            for (;;) {
+                int sz = fgetc(fp);
+                if (sz <= 0) break;
+                if (fseek(fp, sz, SEEK_CUR) != 0) { fclose(fp); return FALSE; }
+            }
+        } else {
+            break;
+        }
+    }
+    fclose(fp);
+    return FALSE;
+}
+
+static gboolean webp_is_animated_file(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return FALSE;
+    unsigned char *buf = g_malloc(65536);
+    size_t n = fread(buf, 1, 65536, fp);
+    fclose(fp);
+    gboolean anim = FALSE;
+    if (n >= 20 && memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WEBP", 4) == 0) {
+        size_t p = 12;
+        while (p + 8 <= n) {
+            uint32_t clen = (uint32_t)buf[p + 4] | ((uint32_t)buf[p + 5] << 8) |
+                            ((uint32_t)buf[p + 6] << 16) | ((uint32_t)buf[p + 7] << 24);
+            if (memcmp(buf + p, "VP8X", 4) == 0 && p + 9 <= n) {
+                if (buf[p + 8] & 0x02) { anim = TRUE; break; }
+            } else if (memcmp(buf + p, "ANIM", 4) == 0) {
+                anim = TRUE;
+                break;
+            }
+            size_t step = 8 + (size_t)clen + (size_t)(clen & 1u);
+            if (step < 8 || step > n - p) break;
+            p += step;
+        }
+    }
+    g_free(buf);
+    return anim;
+}
+
+static gboolean png_is_animated_file(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return FALSE;
+    unsigned char *buf = g_malloc(65536);
+    size_t n = fread(buf, 1, 65536, fp);
+    fclose(fp);
+    gboolean anim = FALSE;
+    static const unsigned char sig[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    if (n >= 24 && memcmp(buf, sig, 8) == 0) {
+        size_t p = 8;
+        while (p + 12 <= n) {
+            uint32_t clen = ((uint32_t)buf[p] << 24) | ((uint32_t)buf[p + 1] << 16) |
+                            ((uint32_t)buf[p + 2] << 8) | (uint32_t)buf[p + 3];
+            if (memcmp(buf + p + 4, "acTL", 4) == 0 && clen >= 4 && p + 12 <= n) {
+                uint32_t nf = ((uint32_t)buf[p + 8] << 24) | ((uint32_t)buf[p + 9] << 16) |
+                              ((uint32_t)buf[p + 10] << 8) | (uint32_t)buf[p + 11];
+                anim = nf > 1;
+                break;
+            }
+            if (memcmp(buf + p + 4, "IDAT", 4) == 0 || memcmp(buf + p + 4, "IEND", 4) == 0) break;
+            size_t step = 12 + (size_t)clen;
+            if (step < 12 || step > n - p) break;
+            p += step;
+        }
+    }
+    g_free(buf);
+    return anim;
+}
+
+static gboolean detect_live_media(const char *path, const char *frag) {
+    const char *env = g_getenv("MISA_WALL_LIVE");
+    if (env && strcmp(env, "0") == 0) return FALSE;
+    if (frag && *frag) return TRUE;
+    if (!path || !*path) return FALSE;
+    if (is_video_path(path)) return TRUE;
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return FALSE;
+    unsigned char m[12] = {0};
+    size_t n = fread(m, 1, sizeof m, fp);
+    fclose(fp);
+    if (n >= 6 && (memcmp(m, "GIF87a", 6) == 0 || memcmp(m, "GIF89a", 6) == 0))
+        return gif_is_animated_file(path);
+    if (n >= 12 && memcmp(m, "RIFF", 4) == 0 && memcmp(m + 8, "WEBP", 4) == 0)
+        return webp_is_animated_file(path);
+    if (n >= 8 && m[0] == 0x89 && m[1] == 'P' && m[2] == 'N' && m[3] == 'G')
+        return png_is_animated_file(path);
+    return FALSE;
+}
+
+static void misa_wall_pause_daemon(gboolean pause) {
+    const char *run = g_getenv("XDG_RUNTIME_DIR");
+    if (!run || !*run) run = "/tmp";
+    const char *disp_raw = g_getenv("DISPLAY");
+    if (!disp_raw || !*disp_raw) disp_raw = ":0";
+    GString *disp = g_string_new("");
+    for (const char *p = disp_raw; *p; p++)
+        g_string_append_c(disp, g_ascii_isalnum(*p) ? *p : '_');
+    if (disp->len == 0) g_string_append_c(disp, '0');
+    char *path = g_strdup_printf("%s/misa-wall-live-%s.pause", run, disp->str);
+    g_string_free(disp, TRUE);
+    if (pause) {
+        char *txt = g_strdup_printf("%d\n", (int)getpid());
+        g_file_set_contents(path, txt, -1, NULL);
+        g_free(txt);
+    } else {
+        g_unlink(path);
+    }
+    g_free(path);
+}
+
+#define MWA_FLAG_LINEAR 1u
+
+typedef struct {
+    uint64_t off;
+    uint32_t comp_len;
+    uint32_t raw_len;
+    uint16_t dirty_x0, dirty_y0, dirty_x1, dirty_y1;
+    uint16_t delay_ms;
+} MwaFrame;
+
+typedef struct {
+    int fd;
+    uint32_t cw, ch, n_frames, fps, flags, frame_idx;
+    MwaFrame *frames;
+    guchar *cell_bgrx;
+    cairo_surface_t *cell_surf;
+    guchar *comp_buf, *delta_buf;
+    size_t comp_cap, delta_cap;
+} MwaPlayer;
+
+static inline uint16_t rd_u16_le(const uint8_t *p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+static inline uint32_t rd_u32_le(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+static inline uint64_t rd_u64_le(const uint8_t *p) {
+    return (uint64_t)rd_u32_le(p) | ((uint64_t)rd_u32_le(p + 4) << 32);
+}
+
+static gboolean pread_exact(int fd, void *buf, size_t len, uint64_t off) {
+    uint8_t *p = buf;
+    size_t done = 0;
+    while (done < len) {
+        ssize_t r = pread(fd, p + done, len - done, (off_t)(off + done));
+        if (r <= 0) return FALSE;
+        done += (size_t)r;
+    }
+    return TRUE;
+}
+
+static ssize_t lz4_decompress_block(const uint8_t *src, size_t slen, uint8_t *dst, size_t dlen) {
+    size_t sp = 0, dp = 0;
+    while (sp < slen) {
+        uint8_t tok = src[sp++];
+        size_t lit = tok >> 4;
+        if (lit == 15) {
+            uint8_t b;
+            do {
+                if (sp >= slen) return -1;
+                b = src[sp++];
+                lit += b;
+            } while (b == 255);
+        }
+        if (lit > slen - sp || lit > dlen - dp) return -1;
+        memcpy(dst + dp, src + sp, lit);
+        sp += lit;
+        dp += lit;
+        if (sp >= slen) break;
+        if (slen - sp < 2) return -1;
+        size_t off = (size_t)src[sp] | ((size_t)src[sp + 1] << 8);
+        sp += 2;
+        if (off == 0 || off > dp) return -1;
+        size_t mlen = (size_t)(tok & 0x0Fu) + 4;
+        if ((tok & 0x0Fu) == 15) {
+            uint8_t b;
+            do {
+                if (sp >= slen) return -1;
+                b = src[sp++];
+                mlen += b;
+            } while (b == 255);
+        }
+        if (mlen > dlen - dp) return -1;
+        size_t mp = dp - off;
+        if (off >= mlen) {
+            memcpy(dst + dp, dst + mp, mlen);
+            dp += mlen;
+        } else if (off == 1) {
+            memset(dst + dp, dst[mp], mlen);
+            dp += mlen;
+        } else {
+            for (size_t k = 0; k < mlen; k++) dst[dp++] = dst[mp++];
+        }
+    }
+    return (ssize_t)dp;
+}
+
+static void mwa_player_free(MwaPlayer *m) {
+    if (!m) return;
+    if (m->cell_surf) cairo_surface_destroy(m->cell_surf);
+    if (m->fd >= 0) close(m->fd);
+    g_free(m->frames);
+    g_free(m->cell_bgrx);
+    g_free(m->comp_buf);
+    g_free(m->delta_buf);
+    g_free(m);
+}
+
+static guint mwa_player_delay_ms(const MwaPlayer *m) {
+    if (!m || m->n_frames == 0) return 80;
+    uint16_t d = m->frames[m->frame_idx % m->n_frames].delay_ms;
+    if (d > 0) return (guint)CLAMP((int)d, 16, 10000);
+    return (guint)CLAMP((int)(1000u / MAX(m->fps, 1u)), 16, 10000);
+}
+
+static MwaPlayer *mwa_player_open(const char *path) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return NULL;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size < 64) { close(fd); return NULL; }
+    uint64_t fsize = (uint64_t)st.st_size;
+
+    uint8_t hdr[64];
+    if (!pread_exact(fd, hdr, 64, 0) || memcmp(hdr, "MWA3\0\0\0\0", 8) != 0 || rd_u32_le(hdr + 8) != 3) {
+        close(fd);
+        return NULL;
+    }
+    uint32_t flags = rd_u32_le(hdr + 12);
+    uint32_t cw = rd_u32_le(hdr + 16);
+    uint32_t ch = rd_u32_le(hdr + 20);
+    uint32_t nf = rd_u32_le(hdr + 24);
+    uint32_t fps = rd_u32_le(hdr + 28);
+    uint64_t base_off = rd_u64_le(hdr + 40);
+    uint32_t base_clen = rd_u32_le(hdr + 48);
+    uint64_t tab_off = rd_u64_le(hdr + 52);
+
+    if (cw == 0 || ch == 0 || cw > 1920 || ch > 1080 || nf == 0 || nf > 4096 ||
+        tab_off + (uint64_t)nf * 44 > fsize || base_off + (uint64_t)base_clen > fsize) {
+        close(fd);
+        return NULL;
+    }
+
+    uint8_t *raw_tab = g_malloc((size_t)nf * 44);
+    if (!pread_exact(fd, raw_tab, (size_t)nf * 44, tab_off)) {
+        g_free(raw_tab);
+        close(fd);
+        return NULL;
+    }
+    MwaFrame *frames = g_new0(MwaFrame, nf);
+    size_t max_comp = base_clen, max_raw = 16;
+    for (uint32_t i = 0; i < nf; i++) {
+        const uint8_t *e = raw_tab + (size_t)i * 44;
+        frames[i].off = rd_u64_le(e);
+        frames[i].comp_len = rd_u32_le(e + 8);
+        frames[i].raw_len = rd_u32_le(e + 12);
+        frames[i].dirty_x0 = rd_u16_le(e + 16);
+        frames[i].dirty_y0 = rd_u16_le(e + 18);
+        frames[i].dirty_x1 = rd_u16_le(e + 20);
+        frames[i].dirty_y1 = rd_u16_le(e + 22);
+        frames[i].delay_ms = rd_u16_le(e + 42);
+        if (frames[i].comp_len > 0 && frames[i].off + frames[i].comp_len > fsize) {
+            g_free(raw_tab);
+            g_free(frames);
+            close(fd);
+            return NULL;
+        }
+        if (frames[i].comp_len > max_comp) max_comp = frames[i].comp_len;
+        if (frames[i].raw_len > max_raw) max_raw = frames[i].raw_len;
+    }
+    g_free(raw_tab);
+
+    size_t npx = (size_t)cw * (size_t)ch;
+    uint8_t *comp = g_malloc(MAX(max_comp, 16));
+    uint8_t *planar = g_malloc(npx * 3);
+    if (!pread_exact(fd, comp, base_clen, base_off) ||
+        lz4_decompress_block(comp, base_clen, planar, npx * 3) != (ssize_t)(npx * 3)) {
+        g_free(comp);
+        g_free(planar);
+        g_free(frames);
+        close(fd);
+        return NULL;
+    }
+
+    guchar *bgrx = g_malloc(npx * 4);
+    const uint8_t *bp = planar;
+    const uint8_t *gp = planar + npx;
+    const uint8_t *rp = planar + npx * 2;
+    for (uint32_t y = 0; y < ch; y++) {
+        size_t row = (size_t)y * cw;
+        uint8_t pb = 0, pg = 0, pr = 0;
+        for (uint32_t x = 0; x < cw; x++) {
+            size_t p = row + x;
+            pb = (uint8_t)(pb + bp[p]);
+            pg = (uint8_t)(pg + gp[p]);
+            pr = (uint8_t)(pr + rp[p]);
+            guchar *d = bgrx + p * 4;
+            d[0] = pb; d[1] = pg; d[2] = pr; d[3] = 0;
+        }
+    }
+    g_free(planar);
+
+    MwaPlayer *m = g_new0(MwaPlayer, 1);
+    m->fd = fd;
+    m->cw = cw;
+    m->ch = ch;
+    m->n_frames = nf;
+    m->fps = CLAMP(fps, 1u, 60u);
+    m->flags = flags;
+    m->frame_idx = 0;
+    m->frames = frames;
+    m->cell_bgrx = bgrx;
+    m->cell_surf = cairo_image_surface_create_for_data(bgrx, CAIRO_FORMAT_RGB24, (int)cw, (int)ch, (int)cw * 4);
+    m->comp_buf = comp;
+    m->comp_cap = MAX(max_comp, 16);
+    m->delta_buf = g_malloc(MAX(max_raw, 16));
+    m->delta_cap = MAX(max_raw, 16);
+    return m;
+}
+
+static gboolean mwa_player_advance(MwaPlayer *m, int *out_x0, int *out_y0, int *out_x1, int *out_y1) {
+    if (out_x0) *out_x0 = 0;
+    if (out_y0) *out_y0 = 0;
+    if (out_x1) *out_x1 = 0;
+    if (out_y1) *out_y1 = 0;
+    if (!m || m->n_frames <= 1) return FALSE;
+    uint32_t next = (m->frame_idx + 1) % m->n_frames;
+    const MwaFrame *f = &m->frames[next];
+    if (f->comp_len > 0 && f->raw_len >= 8 &&
+        f->comp_len <= m->comp_cap && f->raw_len <= m->delta_cap) {
+        if (!pread_exact(m->fd, m->comp_buf, f->comp_len, f->off)) return FALSE;
+        if (lz4_decompress_block(m->comp_buf, f->comp_len, m->delta_buf, f->raw_len) != (ssize_t)f->raw_len)
+            return FALSE;
+        uint32_t runs_len = rd_u32_le(m->delta_buf);
+        uint32_t n_px = rd_u32_le(m->delta_buf + 4);
+        if (8u + (uint64_t)runs_len + (uint64_t)n_px * 3u != f->raw_len) return FALSE;
+        const uint8_t *runs = m->delta_buf + 8;
+        const uint8_t *db = runs + runs_len;
+        const uint8_t *dg = db + n_px;
+        const uint8_t *dr = dg + n_px;
+        size_t max_px = (size_t)m->cw * (size_t)m->ch;
+        size_t rp = 0, dp = 0, cp = 0;
+        while (rp < runs_len) {
+            size_t skip = 0;
+            while (rp < runs_len && runs[rp] == 255) { skip += 255; rp++; }
+            if (rp >= runs_len) return FALSE;
+            skip += runs[rp++];
+            dp += skip;
+            size_t cpy = 0;
+            while (rp < runs_len && runs[rp] == 255) { cpy += 255; rp++; }
+            if (rp >= runs_len) return FALSE;
+            cpy += runs[rp++];
+            if (dp + cpy > max_px || cp + cpy > n_px) return FALSE;
+            for (size_t k = 0; k < cpy; k++) {
+                guchar *p = m->cell_bgrx + (dp + k) * 4;
+                size_t ci = cp + k;
+                p[0] = (guchar)(p[0] + db[ci]);
+                p[1] = (guchar)(p[1] + dg[ci]);
+                p[2] = (guchar)(p[2] + dr[ci]);
+            }
+            cp += cpy;
+            dp += cpy + 1;
+        }
+        int x0 = CLAMP((int)f->dirty_x0, 0, (int)m->cw);
+        int y0 = CLAMP((int)f->dirty_y0, 0, (int)m->ch);
+        int x1 = CLAMP((int)f->dirty_x1, x0, (int)m->cw);
+        int y1 = CLAMP((int)f->dirty_y1, y0, (int)m->ch);
+        if (x1 > x0 && y1 > y0) {
+            cairo_surface_mark_dirty_rectangle(m->cell_surf, x0, y0, x1 - x0, y1 - y0);
+            if (out_x0) *out_x0 = x0;
+            if (out_y0) *out_y0 = y0;
+            if (out_x1) *out_x1 = x1;
+            if (out_y1) *out_y1 = y1;
+        }
+    }
+    m->frame_idx = next;
+    return TRUE;
+}
+
+static void mwa_player_paint_cover(const MwaPlayer *m, cairo_t *cr, int mw, int mh, int top, int ww, int wh) {
+    if (!m || !m->cell_surf) return;
+    double k = MAX((double)mw / (double)m->cw, (double)mh / (double)m->ch);
+    double ox = ((double)m->cw * k - (double)mw) * 0.5;
+    double oy = ((double)m->ch * k - (double)mh) * 0.5 + (double)MIN(top, mh - wh);
+    cairo_save(cr);
+    cairo_translate(cr, -ox, -oy);
+    cairo_scale(cr, k, k);
+    cairo_set_source_surface(cr, m->cell_surf, 0, 0);
+    cairo_pattern_t *pat = cairo_get_source(cr);
+    cairo_pattern_set_filter(pat, (m->flags & MWA_FLAG_LINEAR) ? CAIRO_FILTER_BILINEAR : CAIRO_FILTER_NEAREST);
+    cairo_pattern_set_extend(pat, CAIRO_EXTEND_PAD);
+    cairo_paint(cr);
+    cairo_restore(cr);
+}
+
+static void mwa_player_snapshot_bgrx(const MwaPlayer *m, guchar *dst, int mw, int mh, int top, int ww, int wh) {
+    cairo_surface_t *s = cairo_image_surface_create_for_data(dst, CAIRO_FORMAT_RGB24, ww, wh, ww * 4);
+    cairo_t *cr = cairo_create(s);
+    mwa_player_paint_cover(m, cr, mw, mh, top, ww, wh);
+    cairo_destroy(cr);
+    cairo_surface_flush(s);
+    cairo_surface_destroy(s);
+}
+
+static char *ensure_mwa_cache_path(const char *media_path) {
+    if (!media_path || !*media_path) return NULL;
+    char *bin = g_build_filename(self_dir(), "misa-wall", NULL);
+    if (!g_file_test(bin, G_FILE_TEST_IS_EXECUTABLE)) { g_free(bin); return NULL; }
+    const char *argv[] = {bin, "--ensure-cache", media_path, NULL};
+    char *out = run_out(argv);
+    g_free(bin);
+    if (!out) return NULL;
+    g_strstrip(out);
+    if (!*out || !g_file_test(out, G_FILE_TEST_IS_REGULAR)) {
+        g_free(out);
+        return NULL;
+    }
+    return out;
+}
+
 static struct {
-    int mw, mh, top;                      /* monitor size, bar height above us */
+    Rect mon;                             /* focused monitor geometry */
+    int mw, mh, top;                      /* monitor size, bar height above us (0 in gallery) */
     int ww, wh;                           /* window */
+    RaisedBar *raised_bars;
+    int n_raised_bars;
     GtkWidget *over, *canvas, *dock_ev;
-    LiveGl *gl;
-    gboolean use_gl;
     cairo_surface_t *surf;
     guchar *cur_buf, *src_buf, *tgt_buf;
     guint16 *thresh_buf;
@@ -407,8 +911,11 @@ static struct {
     int bayer4[4][4];
     gint64 trans_start_us;
     int trans_dur_ms, prev_head;
-    gboolean has_cur, trans_done, full_ready, applying, alive;
+    gboolean has_cur, trans_done, full_ready, applying, alive, use_avx2, dev_ready;
     guint tick_id;
+    MwaPlayer *mwa;
+    gboolean mwa_playing;
+    guint mwa_timer;
     int shown;
     guint gen;                            /* bumped per selection: late decodes are dropped */
     guint settle;                         /* the full decode waits until the selection rests */
@@ -417,17 +924,26 @@ static struct {
     GtkWidget *title, *meta, *badge, *apply;
     GtkWidget **thumb_img;                /* filmstrip images filled asynchronously */
     char **thumb_cache;                   /* shared on-disk 176x99 rounded PNG path per item */
-    char **frag_path;                     /* sidecar <stem>.frag per item, or NULL for custom */
-    GArray *thumb_order;                  /* cold-cache / off-screen tile indices queued after GL init */
+    char **frag_path;                     /* sidecar <stem>.frag per item, or NULL */
+    gboolean *is_live;                    /* TRUE for .frag, animated GIF/WebP/APNG, video */
+    GArray *thumb_order;                  /* cold-cache / off-screen tile indices */
     GCancellable *thumb_cancel;
 } G = {.shown = -2, .pending = -1, .prev_head = -1};
 
-static void develop_init_tables(void) {
+/* Lazily allocate transition buffers (src_buf 8.3 MB + thresh_buf 4.1 MB = 12.4 MB)
+ * ONLY when the user switches wallpapers — zero overhead on initial gallery open! */
+static void develop_ensure_ready(void) {
+    if (G.dev_ready) return;
+    G.dev_ready = TRUE;
+#if defined(__x86_64__)
+    G.use_avx2 = __builtin_cpu_supports("avx2") ? TRUE : FALSE;
+#endif
     for (int by = 0; by < 4; by++)
         for (int bx = 0; bx < 4; bx++)
             G.bayer4[by][bx] = (BAYER4_RAW[by][bx] * DEV_W_BAYER) / 15;
 
-    G.thresh_buf = g_new0(guint16, (size_t)G.ww * (size_t)G.wh);
+    if (!G.src_buf) G.src_buf = g_malloc((size_t)G.ww * (size_t)G.wh * 4);
+    G.thresh_buf = g_new(guint16, (size_t)G.ww * (size_t)G.wh);
     G.org_sa = g_new(int, G.ww);
     G.org_cc = g_new(int, G.ww);
     G.org_cb = g_new(int, G.wh);
@@ -450,6 +966,7 @@ static void develop_init_tables(void) {
 }
 
 static void develop_build_thresh(void) {
+    develop_ensure_ready();
     int l_min = 255, l_max = 0;
     for (int y = 0; y < G.wh; y += 16) {
         const guchar *row = G.tgt_buf + (size_t)y * (size_t)G.ww * 4;
@@ -486,6 +1003,7 @@ static void develop_build_thresh(void) {
 }
 
 static void develop_begin(void) {
+    develop_ensure_ready();
     memcpy(G.src_buf, G.cur_buf, (size_t)G.ww * (size_t)G.wh * 4);
     develop_build_thresh();
     G.prev_head = -1;
@@ -532,6 +1050,59 @@ static void pixbuf_to_bgrx(GdkPixbuf *pb, guchar *dst) {
     }
 }
 
+static void mwa_stop_timer(void) {
+    if (G.mwa_timer) {
+        g_source_remove(G.mwa_timer);
+        G.mwa_timer = 0;
+    }
+    G.mwa_playing = FALSE;
+}
+
+static void mwa_drop(gboolean snapshot_to_cur) {
+    if (snapshot_to_cur && G.mwa && G.mwa_playing && G.cur_buf) {
+        mwa_player_snapshot_bgrx(G.mwa, G.cur_buf, G.mw, G.mh, G.top, G.ww, G.wh);
+        if (G.surf) cairo_surface_mark_dirty(G.surf);
+    }
+    mwa_stop_timer();
+    if (G.mwa) {
+        mwa_player_free(G.mwa);
+        G.mwa = NULL;
+    }
+}
+
+static gboolean mwa_tick_cb(gpointer _d) {
+    G.mwa_timer = 0;
+    if (!G.alive || !G.mwa || !G.mwa_playing || !G.trans_done || G.applying)
+        return G_SOURCE_REMOVE;
+    int cx0 = 0, cy0 = 0, cx1 = 0, cy1 = 0;
+    if (mwa_player_advance(G.mwa, &cx0, &cy0, &cx1, &cy1) && G.canvas && cx1 > cx0 && cy1 > cy0) {
+        /* Map dirty cell bounding box through cover transform so Cairo only scales
+         * & repaints the changed region (3-10x lower CPU than full-screen redraw!). */
+        double k = MAX((double)G.mw / (double)G.mwa->cw, (double)G.mh / (double)G.mwa->ch);
+        double ox = ((double)G.mwa->cw * k - (double)G.mw) * 0.5;
+        double oy = ((double)G.mwa->ch * k - (double)G.mh) * 0.5 + (double)MIN(G.top, G.mh - G.wh);
+        int pad = (G.mwa->flags & MWA_FLAG_LINEAR) ? (int)ceil(k) + 2 : 2;
+        int sx0 = CLAMP((int)floor((double)cx0 * k - ox) - pad, 0, G.ww);
+        int sy0 = CLAMP((int)floor((double)cy0 * k - oy) - pad, 0, G.wh);
+        int sx1 = CLAMP((int)ceil((double)cx1 * k - ox) + pad, sx0, G.ww);
+        int sy1 = CLAMP((int)ceil((double)cy1 * k - oy) + pad, sy0, G.wh);
+        if (sx1 > sx0 && sy1 > sy0)
+            gtk_widget_queue_draw_area(G.canvas, sx0, sy0, sx1 - sx0, sy1 - sy0);
+    }
+    G.mwa_timer = g_timeout_add(mwa_player_delay_ms(G.mwa), mwa_tick_cb, NULL);
+    return G_SOURCE_REMOVE;
+}
+
+static void mwa_start_playback(void) {
+    if (!G.alive || !G.mwa || !G.trans_done || G.applying || G.mwa->n_frames <= 1) return;
+    if (!G.mwa_playing) {
+        G.mwa_playing = TRUE;
+        if (G.canvas) gtk_widget_queue_draw(G.canvas);
+    }
+    if (!G.mwa_timer)
+        G.mwa_timer = g_timeout_add(mwa_player_delay_ms(G.mwa), mwa_tick_cb, NULL);
+}
+
 static void gallery_apply_root(int i) {
     if (i <= 0 || i >= S.n || !*S.items[i].under) return;
     char *bin = g_build_filename(self_dir(), "misa-wall", NULL);
@@ -546,20 +1117,15 @@ static void gallery_apply_root(int i) {
 
 static gboolean gallery_finish_idle(gpointer _d) {
     gallery_apply_root(S.result);
-    if (G.use_gl) live_gl_pause_desktop_daemon(FALSE);
+    misa_wall_pause_daemon(FALSE);
     quit();
     return G_SOURCE_REMOVE;
-}
-
-static void on_gl_trans_finished(void *_u) {
-    G.trans_done = TRUE;
-    if (G.applying && G.full_ready) g_idle_add(gallery_finish_idle, NULL);
 }
 
 /* One row of Mira's Luma-Halftone Develop: skips pixels already settled on the
  * previous frame and pixels not yet reached, touching only the ~6% actively
  * blooming halftone dots plus newly settled copies. */
-static gboolean develop_row(int y, int head, int prev_lim) {
+static gboolean develop_row_scalar(int y, int x_start, int head, int prev_lim) {
     size_t px_off = (size_t)y * (size_t)G.ww;
     const guint16 *th_row = G.thresh_buf + px_off;
     guchar *cur = G.cur_buf + px_off * 4;
@@ -567,7 +1133,7 @@ static gboolean develop_row(int y, int head, int prev_lim) {
     const guchar *tgt = G.tgt_buf + px_off * 4;
     gboolean touched = FALSE;
 
-    for (int x = 0; x < G.ww; x++) {
+    for (int x = x_start; x < G.ww; x++) {
         int th = th_row[x];
         if (th >= head || th <= prev_lim) continue;
         touched = TRUE;
@@ -589,6 +1155,79 @@ static gboolean develop_row(int y, int head, int prev_lim) {
         }
     }
     return touched;
+}
+
+#if defined(__x86_64__)
+__attribute__((target("avx2")))
+static gboolean develop_row_avx2(int y, int head, int prev_lim) {
+    size_t px_off = (size_t)y * (size_t)G.ww;
+    const guint16 *th_row = G.thresh_buf + px_off;
+    guchar *cur = G.cur_buf + px_off * 4;
+    const guchar *src = G.src_buf + px_off * 4;
+    const guchar *tgt = G.tgt_buf + px_off * 4;
+
+    const __m256i head_v = _mm256_set1_epi32(head);
+    const __m256i prev_lim_v = _mm256_set1_epi32(prev_lim);
+    const __m256i settle_lim_v = _mm256_set1_epi32(head - DEV_FEATHER);
+    const __m256i zero = _mm256_setzero_si256();
+    const __m256i feather_v = _mm256_set1_epi32(DEV_FEATHER);
+    const __m256i recip_v = _mm256_set1_epi32(DEV_RECIP);
+    const __m256i mask_ff = _mm256_set1_epi32(0xff);
+
+    gboolean touched = FALSE;
+    int x = 0;
+    for (; x + 8 <= G.ww; x += 8) {
+        __m128i th16 = _mm_loadu_si128((const __m128i *)(th_row + x));
+        __m256i th = _mm256_cvtepu16_epi32(th16);
+
+        __m256i reached = _mm256_cmpgt_epi32(head_v, th);
+        __m256i unsettled = _mm256_cmpgt_epi32(th, prev_lim_v);
+        __m256i active = _mm256_and_si256(reached, unsettled);
+        if (_mm256_testz_si256(active, active)) continue;
+
+        touched = TRUE;
+        size_t off = (size_t)x * 4;
+        __m256i not_done = _mm256_cmpgt_epi32(th, settle_lim_v);
+        if (_mm256_testz_si256(not_done, not_done)) {
+            __m256i t_px = _mm256_loadu_si256((const __m256i *)(tgt + off));
+            _mm256_storeu_si256((__m256i *)(cur + off), t_px);
+            continue;
+        }
+
+        __m256i c_px = _mm256_loadu_si256((const __m256i *)(cur + off));
+        __m256i s_px = _mm256_loadu_si256((const __m256i *)(src + off));
+        __m256i t_px = _mm256_loadu_si256((const __m256i *)(tgt + off));
+
+        __m256i diff = _mm256_min_epi32(_mm256_max_epi32(_mm256_sub_epi32(head_v, th), zero), feather_v);
+        __m256i alpha = _mm256_srli_epi32(_mm256_mullo_epi32(diff, recip_v), 16);
+
+        __m256i sb = _mm256_and_si256(s_px, mask_ff);
+        __m256i sg = _mm256_and_si256(_mm256_srli_epi32(s_px, 8), mask_ff);
+        __m256i sr = _mm256_and_si256(_mm256_srli_epi32(s_px, 16), mask_ff);
+
+        __m256i tb = _mm256_and_si256(t_px, mask_ff);
+        __m256i tg = _mm256_and_si256(_mm256_srli_epi32(t_px, 8), mask_ff);
+        __m256i tr = _mm256_and_si256(_mm256_srli_epi32(t_px, 16), mask_ff);
+
+        __m256i ob = _mm256_add_epi32(sb, _mm256_srai_epi32(_mm256_mullo_epi32(_mm256_sub_epi32(tb, sb), alpha), 8));
+        __m256i og = _mm256_add_epi32(sg, _mm256_srai_epi32(_mm256_mullo_epi32(_mm256_sub_epi32(tg, sg), alpha), 8));
+        __m256i or_ = _mm256_add_epi32(sr, _mm256_srai_epi32(_mm256_mullo_epi32(_mm256_sub_epi32(tr, sr), alpha), 8));
+
+        __m256i blended = _mm256_or_si256(_mm256_or_si256(ob, _mm256_slli_epi32(og, 8)), _mm256_slli_epi32(or_, 16));
+        __m256i resolved = _mm256_blendv_epi8(t_px, blended, not_done);
+        __m256i out = _mm256_blendv_epi8(c_px, resolved, active);
+        _mm256_storeu_si256((__m256i *)(cur + off), out);
+    }
+    if (x < G.ww && develop_row_scalar(y, x, head, prev_lim)) touched = TRUE;
+    return touched;
+}
+#endif
+
+static inline gboolean develop_row(int y, int head, int prev_lim) {
+#if defined(__x86_64__)
+    if (G.use_avx2) return develop_row_avx2(y, head, prev_lim);
+#endif
+    return develop_row_scalar(y, 0, head, prev_lim);
 }
 
 static gboolean gallery_tick(GtkWidget *w, GdkFrameClock *_clk, gpointer _d) {
@@ -623,6 +1262,7 @@ static gboolean gallery_tick(GtkWidget *w, GdkFrameClock *_clk, gpointer _d) {
         G.trans_done = TRUE;
         G.tick_id = 0;
         if (G.applying && G.full_ready) g_idle_add(gallery_finish_idle, NULL);
+        else if (G.mwa) mwa_start_playback();
         return G_SOURCE_REMOVE;
     }
     return G_SOURCE_CONTINUE;
@@ -630,12 +1270,15 @@ static gboolean gallery_tick(GtkWidget *w, GdkFrameClock *_clk, gpointer _d) {
 
 static void start_gallery_tick(void) {
     G.trans_done = FALSE;
+    mwa_stop_timer();
     if (!G.tick_id && G.canvas)
         G.tick_id = gtk_widget_add_tick_callback(G.canvas, gallery_tick, NULL, NULL);
 }
 
 static gboolean on_gallery_draw(GtkWidget *_w, cairo_t *cr, gpointer _d) {
-    if (G.surf) {
+    if (G.mwa && G.mwa_playing && G.trans_done) {
+        mwa_player_paint_cover(G.mwa, cr, G.mw, G.mh, G.top, G.ww, G.wh);
+    } else if (G.surf) {
         cairo_set_source_surface(cr, G.surf, 0, 0);
         cairo_paint(cr);
     }
@@ -691,6 +1334,8 @@ static GdkPixbuf *screen_picture(const char *path, gboolean want) {
     return out;
 }
 
+static GdkPixbuf *bake_thumb_pixbuf(const char *cache_dir_path, const char *media, int pw, int ph);
+
 /* A picture as the window's BGRX bytes, made in the thread: the main loop
  * only swaps a pointer. */
 static guchar *to_bgrx(GdkPixbuf *pb) {
@@ -699,137 +1344,52 @@ static guchar *to_bgrx(GdkPixbuf *pb) {
     return buf;
 }
 
-/* Tightly packed RGB888 payload produced on a worker thread for GPU upload. */
 typedef struct {
-    guchar *rgb;
-    int w, h;
-    float luma_max, luma_span;
-    char *frag;
-} GpuPic;
+    guchar *buf;
+    MwaPlayer *mwa;
+} FullResult;
 
-static void gpu_pic_free(gpointer p) {
-    GpuPic *g = p;
-    if (!g) return;
-    g_free(g->rgb);
-    g_free(g->frag);
-    g_free(g);
+static void full_result_free(gpointer p) {
+    FullResult *r = p;
+    if (!r) return;
+    g_free(r->buf);
+    mwa_player_free(r->mwa);
+    g_free(r);
 }
 
-static GpuPic *pixbuf_to_gpu_pic(GdkPixbuf *pb, const char *frag) {
-    if (!pb) return NULL;
-    int w = gdk_pixbuf_get_width(pb);
-    int h = gdk_pixbuf_get_height(pb);
-    int rs = gdk_pixbuf_get_rowstride(pb);
-    int ch = gdk_pixbuf_get_n_channels(pb);
-    const guchar *px = gdk_pixbuf_get_pixels(pb);
-    if (w <= 0 || h <= 0 || (ch != 3 && ch != 4) || !px) return NULL;
-
-    GpuPic *gp = g_new0(GpuPic, 1);
-    gp->w = w;
-    gp->h = h;
-    gp->frag = frag ? g_strdup(frag) : NULL;
-    live_gl_scan_luma_rgb(px, w, h, rs, ch, &gp->luma_max, &gp->luma_span);
-
-    size_t row_rgb = (size_t)w * 3;
-    gp->rgb = g_malloc(row_rgb * (size_t)h);
-    if (ch == 3) {
-        for (int y = 0; y < h; y++)
-            memcpy(gp->rgb + (size_t)y * row_rgb, px + (size_t)y * (size_t)rs, row_rgb);
-    } else {
-        for (int y = 0; y < h; y++) {
-            const guchar *s = px + (size_t)y * (size_t)rs;
-            guchar *d = gp->rgb + (size_t)y * row_rgb;
-            for (int x = 0; x < w; x++) {
-                d[0] = s[0]; d[1] = s[1]; d[2] = s[2];
-                s += 4; d += 3;
-            }
-        }
-    }
-    return gp;
-}
-
-/* Full-monitor cover JPEG cache for large custom static photos on the GPU path. */
-static char *gpu_wall_cache_path(const char *path) {
-    static char *dir;
-    if (!dir) dir = cache_dir("walls");
-    GString *k = g_string_new("gpu ");
-    file_sig(k, path);
-    g_string_append_printf(k, "%dx%d", G.mw, G.mh);
-    char *sum = g_compute_checksum_for_string(G_CHECKSUM_SHA1, k->str, -1);
-    sum[24] = 0;
-    char *name = g_strconcat(sum, ".jpg", NULL);
-    char *out = g_build_filename(dir, name, NULL);
-    g_free(name);
-    g_free(sum);
-    g_string_free(k, TRUE);
-    return out;
-}
-
-static GdkPixbuf *gpu_full_pixbuf(const char *path, const char *frag, gboolean want) {
-    if (frag && *frag) {
-        /* Live shader wallpaper: decode straight at 2x cell grid (~12 ms, ~2.7 MB,
-         * matches misa-wall VRAM footprint — no disk cache write needed). */
-        if (!want) return NULL;
-        int cw = 1280, ch = 720;
-        live_gl_tex_cap(G.mw, G.mh, &cw, &ch);
-        int iw = 0, ih = 0;
-        if (gdk_pixbuf_get_file_info(path, &iw, &ih) && iw > 0 && ih > 0 && (iw > cw || ih > ch))
-            return gdk_pixbuf_new_from_file_at_scale(path, cw, ch, TRUE, NULL);
-        return gdk_pixbuf_new_from_file(path, NULL);
-    }
-    /* Custom static photo: keep full monitor resolution, cached on disk for instant repeats. */
-    char *cached = gpu_wall_cache_path(path);
-    GdkPixbuf *out = NULL;
-    if (g_file_test(cached, G_FILE_TEST_EXISTS)) {
-        utime(cached, NULL);
-        if (want) out = gdk_pixbuf_new_from_file(cached, NULL);
-        if (!want || out) {
-            g_free(cached);
-            return out;
-        }
-    }
-    GdkPixbuf *src = load_cover_size(path, G.mw, G.mh);
-    if (src) {
-        out = cover_pixbuf(src, G.mw, G.mh, 0, FALSE);
-        g_object_unref(src);
-        if (out) {
-            char *dir = g_path_get_dirname(cached), *tmp = g_strconcat(cached, ".tmp", NULL);
-            g_mkdir_with_parents(dir, 0700);
-            if (gdk_pixbuf_save(out, tmp, "jpeg", NULL, "quality", "92", NULL)) g_rename(tmp, cached);
-            else g_unlink(tmp);
-            g_free(tmp);
-            g_free(dir);
-        }
-    }
-    g_free(cached);
-    if (out && !want) {
-        g_object_unref(out);
-        out = NULL;
-    }
-    return out;
-}
-
-typedef struct { char *path, *frag; } FullReq;
+typedef struct { char *path; gboolean is_live; } FullReq;
 static void full_req_free(gpointer p) {
     FullReq *r = p;
     g_free(r->path);
-    g_free(r->frag);
     g_free(r);
 }
 
 static void decode_full(GTask *task, gpointer _src, gpointer data, GCancellable *_c) {
     FullReq *r = data;
-    if (G.use_gl) {
-        GdkPixbuf *pb = gpu_full_pixbuf(r->path, r->frag, TRUE);
-        GpuPic *gp = pixbuf_to_gpu_pic(pb, r->frag);
-        if (pb) g_object_unref(pb);
-        g_task_return_pointer(task, gp, gpu_pic_free);
-        return;
+    FullResult *res = g_new0(FullResult, 1);
+    if (r->is_live) {
+        char *mwa_path = ensure_mwa_cache_path(r->path);
+        if (mwa_path) {
+            MwaPlayer *mp = mwa_player_open(mwa_path);
+            g_free(mwa_path);
+            if (mp) {
+                res->buf = g_malloc0((size_t)G.ww * (size_t)G.wh * 4);
+                mwa_player_snapshot_bgrx(mp, res->buf, G.mw, G.mh, G.top, G.ww, G.wh);
+                res->mwa = mp;
+                g_task_return_pointer(task, res, full_result_free);
+                return;
+            }
+        }
     }
     GdkPixbuf *pb = screen_picture(r->path, TRUE);
-    guchar *buf = pb ? to_bgrx(pb) : NULL;
+    if (!pb && is_video_path(r->path)) {
+        char *tdir = cache_dir("walls");
+        pb = bake_thumb_pixbuf(tdir, r->path, G.ww, G.wh);
+        g_free(tdir);
+    }
+    res->buf = pb ? to_bgrx(pb) : NULL;
     if (pb) g_object_unref(pb);
-    g_task_return_pointer(task, buf, g_free);
+    g_task_return_pointer(task, res, full_result_free);
 }
 
 static void take_target(guchar *buf) {
@@ -837,72 +1397,100 @@ static void take_target(guchar *buf) {
     G.tgt_buf = buf;
 }
 
+typedef struct {
+    char **paths;
+    gboolean *is_live;
+    int n;
+    GCancellable *cancel;
+} WarmReq;
+
+static void warm_req_free(gpointer p) {
+    WarmReq *w = p;
+    if (!w) return;
+    for (int i = 0; i < w->n; i++) g_free(w->paths[i]);
+    g_free(w->paths);
+    g_free(w->is_live);
+    if (w->cancel) g_object_unref(w->cancel);
+    g_free(w);
+}
+
 /* Neighbours made ready on disk, one after another, while nothing moves. */
 static void warm(GTask *task, gpointer _src, gpointer data, GCancellable *_c) {
-    for (char **p = data; *p; p++) {
-        if (G.use_gl) {
-            char *fr = live_gl_find_sidecar(*p);
-            if (!fr) gpu_full_pixbuf(*p, NULL, FALSE);
-            g_free(fr);
+    WarmReq *w = data;
+    for (int i = 0; i < w->n; i++) {
+        if (w->cancel && g_cancellable_is_cancelled(w->cancel)) break;
+        if (w->is_live[i]) {
+            char *mp = ensure_mwa_cache_path(w->paths[i]);
+            g_free(mp);
         } else {
-            screen_picture(*p, FALSE);
+            screen_picture(w->paths[i], FALSE);
         }
     }
     g_task_return_boolean(task, TRUE);
 }
 
 static void full_done(GObject *_o, GAsyncResult *res, gpointer gen) {
-    gpointer payload = g_task_propagate_pointer(G_TASK(res), NULL);
+    FullResult *fr = g_task_propagate_pointer(G_TASK(res), NULL);
     gboolean current = GPOINTER_TO_UINT(gen) == G.gen;
-    if (G.use_gl) {
-        GpuPic *gp = payload;
-        if (gp && current) {
-            G.full_ready = TRUE;
-            live_gl_refine_target(G.gl, gp->rgb, gp->w, gp->h, gp->frag, gp->luma_max, gp->luma_span);
-            if (G.applying && live_gl_trans_done(G.gl)) g_idle_add(gallery_finish_idle, NULL);
+    if (fr && current) {
+        if (fr->buf) {
+            take_target(fr->buf);
+            fr->buf = NULL;
+            G.has_cur = TRUE;
         }
-        gpu_pic_free(gp);
-    } else {
-        guchar *pb = payload;
-        if (pb && current) {
-            take_target(pb);
-            pb = NULL;
-            G.full_ready = TRUE;
-            if (G.trans_done) {
+        if (fr->mwa) {
+            mwa_drop(FALSE);
+            G.mwa = fr->mwa;
+            fr->mwa = NULL;
+        }
+        G.full_ready = TRUE;
+        if (G.trans_done) {
+            if (G.tgt_buf) {
                 memcpy(G.cur_buf, G.tgt_buf, (size_t)G.ww * (size_t)G.wh * 4);
                 cairo_surface_mark_dirty(G.surf);
-                gtk_widget_queue_draw(G.canvas);
-                if (G.applying) g_idle_add(gallery_finish_idle, NULL);
-            } else {
-                develop_build_thresh();
-                G.prev_head = -1;
-                start_gallery_tick();
             }
+            if (G.applying) g_idle_add(gallery_finish_idle, NULL);
+            else if (G.mwa) mwa_start_playback();
+            else if (G.canvas) gtk_widget_queue_draw(G.canvas);
+        } else {
+            develop_build_thresh();
+            G.prev_head = -1;
+            start_gallery_tick();
         }
-        g_free(pb);
     }
+    full_result_free(fr);
     heap_trim();
-    if (!current) return;
-    GPtrArray *next = g_ptr_array_new();
+    if (!current || !G.alive) return;
+    WarmReq *w = g_new0(WarmReq, 1);
+    w->paths = g_new0(char *, 2);
+    w->is_live = g_new0(gboolean, 2);
+    w->cancel = G.thumb_cancel ? g_object_ref(G.thumb_cancel) : NULL;
     for (int d = 1; d >= -1; d -= 2) {
         int j = S.cur + d;
-        if (j >= 0 && j < S.n && *S.items[j].under) g_ptr_array_add(next, g_strdup(S.items[j].under));
+        if (j >= 0 && j < S.n && *S.items[j].under) {
+            w->paths[w->n] = g_strdup(S.items[j].under);
+            w->is_live[w->n] = G.is_live && G.is_live[j];
+            w->n++;
+        }
     }
-    g_ptr_array_add(next, NULL);
-    GTask *t = g_task_new(NULL, NULL, NULL, NULL);
-    g_task_set_task_data(t, g_ptr_array_free(next, FALSE), (GDestroyNotify)g_strfreev);
-    g_task_run_in_thread(t, warm);
-    g_object_unref(t);
+    if (w->n > 0) {
+        GTask *t = g_task_new(NULL, NULL, NULL, NULL);
+        g_task_set_task_data(t, w, warm_req_free);
+        g_task_run_in_thread(t, warm);
+        g_object_unref(t);
+    } else {
+        warm_req_free(w);
+    }
 }
 
-#define SETTLE_MS 180
+#define SETTLE_MS 160
 
 static gboolean decode_later(gpointer data) {
     G.settle = 0;
     FullReq *orig = data;
     FullReq *req = g_new0(FullReq, 1);
     req->path = g_strdup(orig->path);
-    req->frag = orig->frag ? g_strdup(orig->frag) : NULL;
+    req->is_live = orig->is_live;
     GTask *t = g_task_new(NULL, NULL, full_done, GUINT_TO_POINTER(G.gen));
     g_task_set_task_data(t, req, full_req_free);
     g_task_run_in_thread(t, decode_full);
@@ -910,14 +1498,14 @@ static gboolean decode_later(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-/* The quick picture of item i: on GPU live wallpapers (.frag) decode straight at
- * 2x cell grid (~12 ms, full=TRUE at once!); on custom photos uses cached JPEG or
+/* The quick picture of item i: for live items uses cached MWA3 (base frame 0 +
+ * live player) in ~4 ms when cached; for static photos uses cached JPEG or
  * cached thumbnail scaled up while full-res decodes in the background. */
 typedef struct {
-    char *cached, *thumb, *under, *frag;
+    char *cached, *thumb, *under;
     guchar *buf;
-    GpuPic *gpu;
-    gboolean full, allow_full, use_gl;
+    MwaPlayer *mwa;
+    gboolean full, allow_full, is_live, have_buf;
 } Quick;
 
 static void quick_free(gpointer p) {
@@ -925,41 +1513,30 @@ static void quick_free(gpointer p) {
     g_free(q->cached);
     g_free(q->thumb);
     g_free(q->under);
-    g_free(q->frag);
     g_free(q->buf);
-    gpu_pic_free(q->gpu);
+    mwa_player_free(q->mwa);
     g_free(q);
 }
 
 static void make_quick(Quick *q) {
-    if (q->use_gl) {
-        GdkPixbuf *pb = NULL;
-        if (q->frag && *q->frag) {
-            pb = gpu_full_pixbuf(q->under, q->frag, TRUE);
-            q->full = pb != NULL;
-        } else {
-            if (g_file_test(q->cached, G_FILE_TEST_EXISTS)) {
-                utime(q->cached, NULL);
-                pb = gdk_pixbuf_new_from_file(q->cached, NULL);
-                q->full = pb != NULL;
-            }
-            if (!pb && *q->thumb && g_file_test(q->thumb, G_FILE_TEST_EXISTS)) {
-                pb = gdk_pixbuf_new_from_file(q->thumb, NULL);
-            }
-            if (!pb && q->allow_full && *q->under) {
-                pb = gpu_full_pixbuf(q->under, NULL, TRUE);
-                q->full = pb != NULL;
+    if (q->is_live && q->allow_full) {
+        char *mwa_path = ensure_mwa_cache_path(q->under);
+        if (mwa_path) {
+            MwaPlayer *mp = mwa_player_open(mwa_path);
+            g_free(mwa_path);
+            if (mp) {
+                q->buf = g_malloc0((size_t)G.ww * (size_t)G.wh * 4);
+                mwa_player_snapshot_bgrx(mp, q->buf, G.mw, G.mh, G.top, G.ww, G.wh);
+                q->mwa = mp;
+                q->full = TRUE;
+                q->have_buf = TRUE;
+                return;
             }
         }
-        if (pb) {
-            q->gpu = pixbuf_to_gpu_pic(pb, q->frag);
-            g_object_unref(pb);
-        }
-        return;
     }
 
     GdkPixbuf *pb = NULL;
-    if (g_file_test(q->cached, G_FILE_TEST_EXISTS)) {
+    if (!q->is_live && g_file_test(q->cached, G_FILE_TEST_EXISTS)) {
         utime(q->cached, NULL);
         pb = gdk_pixbuf_new_from_file(q->cached, NULL);
         q->full = pb != NULL;
@@ -969,12 +1546,20 @@ static void make_quick(Quick *q) {
         pb = small ? screen_part(small) : NULL;
         if (small) g_object_unref(small);
     }
-    if (!pb && q->allow_full && *q->under) {
-        pb = screen_picture(q->under, TRUE);
-        q->full = pb != NULL;
+    if (!pb && (q->allow_full || !is_video_path(q->under)) && *q->under) {
+        if (!is_video_path(q->under)) {
+            pb = screen_picture(q->under, TRUE);
+            if (!q->is_live) q->full = pb != NULL;
+        } else if (q->allow_full) {
+            char *tdir = cache_dir("walls");
+            pb = bake_thumb_pixbuf(tdir, q->under, G.ww, G.wh);
+            g_free(tdir);
+            q->full = pb != NULL;
+        }
     }
     if (pb) {
         q->buf = to_bgrx(pb);
+        q->have_buf = TRUE;
         g_object_unref(pb);
     } else {
         q->buf = g_malloc0((size_t)G.ww * (size_t)G.wh * 4);
@@ -983,9 +1568,8 @@ static void make_quick(Quick *q) {
 
 static Quick *quick_new(int i, gboolean allow_full) {
     Quick *q = g_new0(Quick, 1);
-    q->use_gl = G.use_gl;
-    q->frag = (G.frag_path && G.frag_path[i]) ? g_strdup(G.frag_path[i]) : NULL;
-    q->cached = G.use_gl ? gpu_wall_cache_path(S.items[i].under) : wall_cache_path(S.items[i].under);
+    q->is_live = G.is_live && G.is_live[i];
+    q->cached = wall_cache_path(S.items[i].under);
     const char *th = *S.items[i].image ? S.items[i].image
                      : (G.thumb_cache && G.thumb_cache[i] ? G.thumb_cache[i] : "");
     q->thumb = g_strdup(th);
@@ -999,16 +1583,16 @@ static void quick_thread(GTask *task, gpointer _src, gpointer data, GCancellable
     g_task_return_boolean(task, TRUE);
 }
 
-/* The full picture once the selection rests (at once when applying). */
+/* The full picture once the selection rests (at once when applying or live initial). */
 static void after_quick(int i, gboolean full, gboolean animate) {
     G.full_ready = full;
     if (G.settle) { g_source_remove(G.settle); G.settle = 0; }
     if (!full) {
         FullReq *req = g_new0(FullReq, 1);
         req->path = g_strdup(S.items[i].under);
-        req->frag = (G.frag_path && G.frag_path[i]) ? g_strdup(G.frag_path[i]) : NULL;
-        G.settle = g_timeout_add_full(G_PRIORITY_DEFAULT, animate && !G.applying ? SETTLE_MS : 0,
-                                      decode_later, req, full_req_free);
+        req->is_live = G.is_live && G.is_live[i];
+        guint delay = (animate && !G.applying && !req->is_live) ? SETTLE_MS : 0;
+        G.settle = g_timeout_add_full(G_PRIORITY_DEFAULT, delay, decode_later, req, full_req_free);
     }
 }
 
@@ -1021,23 +1605,16 @@ static void quick_done(GObject *_o, GAsyncResult *res, gpointer data) {
     int i = (int)(GPOINTER_TO_UINT(data) & 0xFFFF);
     G.loading = FALSE;
     if ((gen & 0xFFFF) == (G.gen & 0xFFFF) && G.pending < 0) {
-        if (G.use_gl) {
-            if (q->gpu) {
-                G.trans_done = FALSE;
-                int dur = G.applying ? DEV_DUR_APPLY_MS : DEV_DUR_BROWSE_MS;
-                live_gl_set_wallpaper(G.gl, q->gpu->rgb, q->gpu->w, q->gpu->h,
-                                      q->gpu->frag, q->gpu->luma_max, q->gpu->luma_span,
-                                      TRUE, dur);
-                if (G.applying) live_gl_set_finish_cb(G.gl, on_gl_trans_finished, NULL);
-            }
-            after_quick(i, q->full, TRUE);
-        } else {
-            take_target(q->buf);
-            q->buf = NULL;
-            develop_begin();
-            start_gallery_tick();
-            after_quick(i, q->full, TRUE);
+        mwa_drop(TRUE);
+        if (q->mwa) {
+            G.mwa = q->mwa;
+            q->mwa = NULL;
         }
+        take_target(q->buf);
+        q->buf = NULL;
+        develop_begin();
+        start_gallery_tick();
+        after_quick(i, q->full, TRUE);
     }
     if (G.pending >= 0) {
         int j = G.pending;
@@ -1070,30 +1647,18 @@ static void show_wallpaper(int i, gboolean animate) {
     G.full_ready = FALSE;
     if (G.settle) { g_source_remove(G.settle); G.settle = 0; }
 
-    /* The first picture is made before anything shows (no black frame) when
-     * already cached on disk; uncached cold starts never block window map. */
     if (animate && G.has_cur) {
         request_quick(i);
         return;
     }
-    Quick *q = quick_new(i, G.use_gl && G.frag_path && G.frag_path[i] != NULL);
+    mwa_drop(FALSE);
+    /* Initial open: show cached thumb/image synchronously (no black frame) and
+     * kick off async MWA3 ensure-cache for live wallpapers so open never stalls. */
+    Quick *q = quick_new(i, FALSE);
     make_quick(q);
-    if (G.use_gl) {
-        if (q->gpu) {
-            live_gl_set_wallpaper(G.gl, q->gpu->rgb, q->gpu->w, q->gpu->h,
-                                  q->gpu->frag, q->gpu->luma_max, q->gpu->luma_span,
-                                  FALSE, 0);
-            G.has_cur = TRUE;
-        }
-        G.trans_done = TRUE;
-        after_quick(i, q->full, animate);
-        quick_free(q);
-        return;
-    }
     take_target(q->buf);
     q->buf = NULL;
     memcpy(G.cur_buf, G.tgt_buf, (size_t)G.ww * (size_t)G.wh * 4);
-    memcpy(G.src_buf, G.tgt_buf, (size_t)G.ww * (size_t)G.wh * 4);
     G.has_cur = TRUE;
     G.trans_done = TRUE;
     cairo_surface_mark_dirty(G.surf);
@@ -1113,8 +1678,8 @@ static void gallery_cleanup(void) {
         g_array_free(G.thumb_order, TRUE);
         G.thumb_order = NULL;
     }
-    if (G.gl) live_gl_stop(G.gl);
-    if (G.use_gl) live_gl_pause_desktop_daemon(FALSE);
+    mwa_drop(FALSE);
+    misa_wall_pause_daemon(FALSE);
     if (G.tick_id && G.canvas) {
         gtk_widget_remove_tick_callback(G.canvas, G.tick_id);
         G.tick_id = 0;
@@ -1127,10 +1692,10 @@ static void gallery_cleanup(void) {
 
 static void gallery_confirm(int i) {
     if (G.applying) return;
-    gboolean done = G.use_gl ? live_gl_trans_done(G.gl) : G.trans_done;
-    if (done && G.full_ready) {
+    mwa_stop_timer();
+    if (G.trans_done && G.full_ready) {
         gallery_apply_root(i);
-        if (G.use_gl) live_gl_pause_desktop_daemon(FALSE);
+        misa_wall_pause_daemon(FALSE);
         quit();
         return;
     }
@@ -1140,26 +1705,21 @@ static void gallery_confirm(int i) {
     if (G.settle) {
         g_source_remove(G.settle);
         G.settle = 0;
-        FullReq req = {S.items[i].under, G.frag_path ? G.frag_path[i] : NULL};
+        FullReq req = {S.items[i].under, G.is_live && G.is_live[i]};
         decode_later(&req);
     }
-    if (G.use_gl) {
-        if (!live_gl_trans_done(G.gl)) live_gl_set_finish_cb(G.gl, on_gl_trans_finished, NULL);
-        else if (G.full_ready) g_idle_add(gallery_finish_idle, NULL);
-    } else if (!G.trans_done) {
-        start_gallery_tick();
-    }
+    if (!G.trans_done) start_gallery_tick();
 }
 
 static void caption(int i) {
     Item *it = &S.items[i];
     gtk_label_set_text(GTK_LABEL(G.title), it->title);
     gboolean add = !*it->under;
-    gboolean is_live = G.frag_path && G.frag_path[i] != NULL;
+    gboolean is_live = G.is_live && G.is_live[i];
     int w = 0, h = 0;
     char *meta;
     if (add) meta = g_strdup(it->sub);
-    else if (gdk_pixbuf_get_file_info(it->under, &w, &h))
+    else if (!is_video_path(it->under) && gdk_pixbuf_get_file_info(it->under, &w, &h))
         meta = g_strdup_printf("%s%s%d \xc3\x97 %d%s", it->sub, *it->sub ? "  \xc2\xb7  " : "", w, h,
                                is_live ? "  \xc2\xb7  LIVE" : "");
     else meta = g_strdup_printf("%s%s", it->sub, is_live ? "  \xc2\xb7  LIVE" : "");
@@ -1209,9 +1769,8 @@ static char *thumb_cache_path(const char *src, const char *frag) {
 }
 
 typedef struct { int idx; char *src, *frag, *cache; } ThumbJob;
-typedef struct { ThumbJob *jobs; int n; char *dir; gboolean use_gl; GCancellable *cancel; } ThumbBatch;
+typedef struct { ThumbJob *jobs; int n; char *dir; GCancellable *cancel; } ThumbBatch;
 typedef struct { int idx; GdkPixbuf *pb; } ThumbResult;
-typedef struct { int idx, w, h; guchar *rgb; char *frag, *cache, *dir; } LiveThumbReq;
 
 static void thumb_batch_free(gpointer p) {
     ThumbBatch *b = p;
@@ -1230,20 +1789,6 @@ static void thumb_result_free(gpointer p) {
     ThumbResult *r = p;
     if (r->pb) g_object_unref(r->pb);
     g_free(r);
-}
-
-static void live_thumb_req_free(gpointer p) {
-    LiveThumbReq *r = p;
-    g_free(r->rgb);
-    g_free(r->frag);
-    g_free(r->cache);
-    g_free(r->dir);
-    g_free(r);
-}
-
-static void rgb_pixbuf_free(guchar *px, gpointer _d) {
-    (void)_d;
-    g_free(px);
 }
 
 static void save_thumb_cache(const char *dir, const char *cache, GdkPixbuf *pb) {
@@ -1266,42 +1811,6 @@ static gboolean apply_thumb_idle(gpointer p) {
     return G_SOURCE_REMOVE;
 }
 
-static gboolean apply_live_thumb_idle(gpointer p) {
-    LiveThumbReq *r = p;
-    if (!G.alive || !G.thumb_img || r->idx < 0 || r->idx >= S.n || !G.thumb_img[r->idx])
-        return G_SOURCE_REMOVE;
-
-    GdkPixbuf *pb = NULL;
-    if (G.use_gl && G.gl && live_gl_ready(G.gl)) {
-        guchar *rendered = live_gl_render_thumb(G.gl, r->rgb, r->w, r->h, r->frag, TW, TH, 4.2f);
-        if (rendered) {
-            GdkPixbuf *raw = gdk_pixbuf_new_from_data(rendered, GDK_COLORSPACE_RGB, FALSE, 8,
-                                                      TW, TH, TW * 3, rgb_pixbuf_free, NULL);
-            if (raw) {
-                pb = round_corners(raw, 10, FALSE);
-                g_object_unref(raw);
-            } else {
-                g_free(rendered);
-            }
-        }
-    }
-    if (!pb && r->rgb && r->w > 0 && r->h > 0) {
-        GdkPixbuf *src = gdk_pixbuf_new_from_data(r->rgb, GDK_COLORSPACE_RGB, FALSE, 8,
-                                                  r->w, r->h, r->w * 3, NULL, NULL);
-        if (src) {
-            pb = cover_pixbuf(src, TW, TH, 10, FALSE);
-            g_object_unref(src);
-        }
-    }
-    if (pb) {
-        gtk_style_context_remove_class(gtk_widget_get_style_context(G.thumb_img[r->idx]), "thumb-slot");
-        gtk_image_set_from_pixbuf(GTK_IMAGE(G.thumb_img[r->idx]), pb);
-        save_thumb_cache(r->dir, r->cache, pb);
-        g_object_unref(pb);
-    }
-    return G_SOURCE_REMOVE;
-}
-
 static void thumb_worker(GTask *task, gpointer _src, gpointer data, GCancellable *_c) {
     ThumbBatch *b = data;
     for (int k = 0; k < b->n; k++) {
@@ -1313,37 +1822,30 @@ static void thumb_worker(GTask *task, gpointer _src, gpointer data, GCancellable
             pb = gdk_pixbuf_new_from_file(j->cache, NULL);
         }
         if (!pb && j->frag && *j->frag) {
-            if (b->use_gl) {
-                GdkPixbuf *src_pb = load_cover_size(j->src, TW * 2, TH * 2);
-                GpuPic *gp = src_pb ? pixbuf_to_gpu_pic(src_pb, NULL) : NULL;
-                if (src_pb) g_object_unref(src_pb);
-                if (gp && !(b->cancel && g_cancellable_is_cancelled(b->cancel))) {
-                    LiveThumbReq *req = g_new0(LiveThumbReq, 1);
-                    req->idx = j->idx;
-                    req->w = gp->w;
-                    req->h = gp->h;
-                    req->rgb = gp->rgb;
-                    gp->rgb = NULL;
-                    req->frag = g_strdup(j->frag);
-                    req->cache = g_strdup(j->cache);
-                    req->dir = g_strdup(b->dir);
-                    gpu_pic_free(gp);
-                    g_idle_add_full(G_PRIORITY_HIGH_IDLE, apply_live_thumb_idle,
-                                    req, live_thumb_req_free);
-                    continue;
-                }
-                gpu_pic_free(gp);
-            } else {
-                GdkPixbuf *baked = bake_dither_pixbuf(b->dir, j->src, j->frag, TW, TH);
-                if (baked) {
-                    pb = round_corners(baked, 10, FALSE);
-                    g_object_unref(baked);
-                    if (pb) save_thumb_cache(b->dir, j->cache, pb);
-                }
+            GdkPixbuf *baked = bake_dither_pixbuf(b->dir, j->src, j->frag, TW, TH);
+            if (baked) {
+                pb = round_corners(baked, 10, FALSE);
+                g_object_unref(baked);
+                if (pb) save_thumb_cache(b->dir, j->cache, pb);
+            }
+        }
+        if (!pb && is_video_path(j->src)) {
+            GdkPixbuf *baked = bake_thumb_pixbuf(b->dir, j->src, TW, TH);
+            if (baked) {
+                pb = round_corners(baked, 10, FALSE);
+                g_object_unref(baked);
+                if (pb) save_thumb_cache(b->dir, j->cache, pb);
             }
         }
         if (!pb) {
             pb = cover_file(j->src, TW, TH, 10, FALSE);
+            if (!pb) {
+                GdkPixbuf *baked = bake_thumb_pixbuf(b->dir, j->src, TW, TH);
+                if (baked) {
+                    pb = round_corners(baked, 10, FALSE);
+                    g_object_unref(baked);
+                }
+            }
             if (pb) save_thumb_cache(b->dir, j->cache, pb);
         }
         if (pb && !(b->cancel && g_cancellable_is_cancelled(b->cancel))) {
@@ -1374,7 +1876,6 @@ static void gallery_start_thumbs(void) {
         b->jobs = g_new0(ThumbJob, count);
         b->n = count;
         b->dir = g_strdup(tdir);
-        b->use_gl = G.use_gl;
         b->cancel = g_object_ref(G.thumb_cancel);
         for (int k = 0; k < count; k++) {
             int idx = g_array_index(order, int, w + k * nw);
@@ -1393,52 +1894,151 @@ static void gallery_start_thumbs(void) {
     g_array_free(order, TRUE);
 }
 
-static void gallery_init_cairo_fallback(void) {
-    if (G.canvas) return;
-    G.cur_buf = g_malloc0((size_t)G.ww * (size_t)G.wh * 4);
-    G.src_buf = g_malloc0((size_t)G.ww * (size_t)G.wh * 4);
-    G.tgt_buf = g_malloc0((size_t)G.ww * (size_t)G.wh * 4);
-    develop_init_tables();
-    G.surf = cairo_image_surface_create_for_data(G.cur_buf, CAIRO_FORMAT_RGB24, G.ww, G.wh, G.ww * 4);
-    G.canvas = gtk_drawing_area_new();
-    gtk_widget_set_size_request(G.canvas, G.ww, G.wh);
-    g_signal_connect(G.canvas, "draw", G_CALLBACK(on_gallery_draw), NULL);
-    if (G.over) {
-        GtkWidget *old = gtk_bin_get_child(GTK_BIN(G.over));
-        if (old) gtk_container_remove(GTK_CONTAINER(G.over), old);
-        G.gl = NULL;
-        gtk_container_add(GTK_CONTAINER(G.over), G.canvas);
-        gtk_widget_show(G.canvas);
-    }
-}
+/* Raise viewable Polybar / dock windows on the active monitor directly above
+ * CardPicker's full-monitor gallery window so wallpaper transitions play
+ * seamlessly behind floating/island/minimal topbars while the bar stays sharp. */
+static gboolean is_monitor_bar_window(Display *dpy, Window w, Window self,
+                                      Atom a_wm_type, Atom a_dock, Rect mon) {
+    if (w == None || w == self) return FALSE;
+    XWindowAttributes attr;
+    if (!XGetWindowAttributes(dpy, w, &attr)) return FALSE;
+    if (attr.map_state != IsViewable || attr.class != InputOutput) return FALSE;
+    if (attr.x >= mon.x + mon.w || attr.x + attr.width <= mon.x ||
+        attr.y >= mon.y + mon.h || attr.y + attr.height <= mon.y)
+        return FALSE;
 
-static void gallery_after_show(void) {
-    if (G.gl) {
-        gtk_widget_realize(live_gl_widget(G.gl));
-        if (live_gl_ready(G.gl)) {
-            G.use_gl = TRUE;
-            live_gl_pause_desktop_daemon(TRUE);
-            gallery_start_thumbs();
-            return;
+    gboolean matched = FALSE;
+    XClassHint ch = {NULL, NULL};
+    if (XGetClassHint(dpy, w, &ch)) {
+        if ((ch.res_class && g_ascii_strcasecmp(ch.res_class, "Polybar") == 0) ||
+            (ch.res_name && g_ascii_strcasecmp(ch.res_name, "polybar") == 0))
+            matched = TRUE;
+        if (ch.res_name) XFree(ch.res_name);
+        if (ch.res_class) XFree(ch.res_class);
+    }
+    if (!matched && a_wm_type != None && a_dock != None) {
+        Atom actual_type = None;
+        int actual_fmt = 0;
+        unsigned long nitems = 0, bytes_after = 0;
+        unsigned char *prop = NULL;
+        if (XGetWindowProperty(dpy, w, a_wm_type, 0, 16, False, XA_ATOM,
+                               &actual_type, &actual_fmt, &nitems, &bytes_after, &prop) == Success &&
+            prop) {
+            if (actual_type == XA_ATOM && actual_fmt == 32) {
+                Atom *atoms = (Atom *)prop;
+                for (unsigned long k = 0; k < nitems; k++) {
+                    if (atoms[k] == a_dock) { matched = TRUE; break; }
+                }
+            }
+            XFree(prop);
         }
     }
-    G.use_gl = FALSE;
-    gallery_init_cairo_fallback();
-    gallery_start_thumbs();
+    return matched;
 }
 
-static gboolean on_gallery_motion(GtkWidget *_w, GdkEventMotion *ev, gpointer _) {
-    if (G.use_gl && G.gl && G.mw > 0 && G.mh > 0) {
-        float nx = (float)(ev->x / G.mw) * 2.0f - 1.0f;
-        float ny = (float)((ev->y + G.top) / G.mh) * 2.0f - 1.0f;
-        if (nx < -1.0f) nx = -1.0f; else if (nx > 1.0f) nx = 1.0f;
-        if (ny < -1.0f) ny = -1.0f; else if (ny > 1.0f) ny = 1.0f;
-        live_gl_set_mouse(G.gl, nx, ny);
+static void gallery_raise_bars(void) {
+    if (!S.win || G.n_raised_bars > 0) return;
+    GdkWindow *gw = gtk_widget_get_window(S.win);
+    if (!gw) return;
+    GdkDisplay *gd = gdk_display_get_default();
+    if (!gd || !GDK_IS_X11_DISPLAY(gd)) return;
+    Display *dpy = GDK_DISPLAY_XDISPLAY(gd);
+    Window card_xwin = gdk_x11_window_get_xid(gw);
+    if (card_xwin == None) return;
+
+    gdk_x11_display_error_trap_push(gd);
+    Atom a_wm_type = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE", True);
+    Atom a_dock = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DOCK", True);
+
+    Window root_ret = None, parent_ret = None, *kids = NULL;
+    unsigned int nk = 0;
+    if (XQueryTree(dpy, DefaultRootWindow(dpy), &root_ret, &parent_ret, &kids, &nk) && kids && nk > 0) {
+        gboolean *is_bar = g_new0(gboolean, nk);
+        int count = 0;
+        for (unsigned int i = 0; i < nk; i++) {
+            if (is_monitor_bar_window(dpy, kids[i], card_xwin, a_wm_type, a_dock, G.mon)) {
+                is_bar[i] = TRUE;
+                count++;
+            }
+        }
+        if (count > 0) {
+            G.raised_bars = g_new0(RaisedBar, count);
+            G.n_raised_bars = 0;
+            Window anchor = card_xwin;
+            for (unsigned int i = 0; i < nk; i++) {
+                if (!is_bar[i]) continue;
+                Window above = None, below = None;
+                for (unsigned int k = i + 1; k < nk; k++) {
+                    if (!is_bar[k] && kids[k] != card_xwin) { above = kids[k]; break; }
+                }
+                for (unsigned int k = i; k > 0; k--) {
+                    if (!is_bar[k - 1] && kids[k - 1] != card_xwin) { below = kids[k - 1]; break; }
+                }
+                G.raised_bars[G.n_raised_bars++] = (RaisedBar){kids[i], above, below};
+                XWindowChanges wc;
+                memset(&wc, 0, sizeof wc);
+                wc.sibling = anchor;
+                wc.stack_mode = Above;
+                XConfigureWindow(dpy, kids[i], CWSibling | CWStackMode, &wc);
+                anchor = kids[i];
+            }
+            XFlush(dpy);
+        }
+        g_free(is_bar);
+        XFree(kids);
     }
+    gdk_x11_display_error_trap_pop_ignored(gd);
+}
+
+static gboolean window_in_list(Window w, const Window *kids, unsigned int nk) {
+    if (w == None || !kids) return FALSE;
+    for (unsigned int i = 0; i < nk; i++)
+        if (kids[i] == w) return TRUE;
     return FALSE;
 }
 
+static void gallery_restore_bars(void) {
+    if (G.n_raised_bars <= 0 || !G.raised_bars) return;
+    GdkDisplay *gd = gdk_display_get_default();
+    if (gd && GDK_IS_X11_DISPLAY(gd)) {
+        Display *dpy = GDK_DISPLAY_XDISPLAY(gd);
+        gdk_x11_display_error_trap_push(gd);
+        Window root_ret = None, parent_ret = None, *kids = NULL;
+        unsigned int nk = 0;
+        if (XQueryTree(dpy, DefaultRootWindow(dpy), &root_ret, &parent_ret, &kids, &nk) && kids) {
+            for (int i = 0; i < G.n_raised_bars; i++) {
+                RaisedBar *rb = &G.raised_bars[i];
+                if (!window_in_list(rb->bar, kids, nk)) continue;
+                XWindowChanges wc;
+                memset(&wc, 0, sizeof wc);
+                if (window_in_list(rb->prev_below, kids, nk)) {
+                    wc.sibling = rb->prev_below;
+                    wc.stack_mode = Above;
+                    XConfigureWindow(dpy, rb->bar, CWSibling | CWStackMode, &wc);
+                } else if (window_in_list(rb->prev_above, kids, nk)) {
+                    wc.sibling = rb->prev_above;
+                    wc.stack_mode = Below;
+                    XConfigureWindow(dpy, rb->bar, CWSibling | CWStackMode, &wc);
+                }
+            }
+            XFree(kids);
+            XFlush(dpy);
+        }
+        gdk_x11_display_error_trap_pop_ignored(gd);
+    }
+    g_free(G.raised_bars);
+    G.raised_bars = NULL;
+    G.n_raised_bars = 0;
+}
+
+static void gallery_after_show(void) {
+    gallery_raise_bars();
+    misa_wall_pause_daemon(TRUE);
+    gallery_start_thumbs();
+}
+
 static GtkWidget *build_gallery(Rect mon, Rect win) {
+    G.mon = mon;
     G.mw = mon.w;
     G.mh = mon.h;
     G.top = win.y - mon.y;
@@ -1448,17 +2048,26 @@ static GtkWidget *build_gallery(Rect mon, Rect win) {
     G.thumb_img = g_new0(GtkWidget *, S.n);
     G.thumb_cache = g_new0(char *, S.n);
     G.frag_path = g_new0(char *, S.n);
+    G.is_live = g_new0(gboolean, S.n);
     G.thumb_cancel = g_cancellable_new();
     add_class(S.win, "gallery");
 
-    for (int i = 0; i < S.n; i++)
-        if (*S.items[i].under) G.frag_path[i] = live_gl_find_sidecar(S.items[i].under);
+    for (int i = 0; i < S.n; i++) {
+        if (*S.items[i].under) {
+            G.frag_path[i] = find_sidecar_frag(S.items[i].under);
+            G.is_live[i] = detect_live_media(S.items[i].under, G.frag_path[i]);
+        }
+    }
 
-    /* GPU live-shader & Luma-Halftone Develop surface (zero 28 MB CPU buffers
-     * allocated unless OpenGL fails to realize in gallery_after_show()). */
-    G.gl = live_gl_new(G.mw, G.mh, G.top, G.ww, G.wh);
-    GtkWidget *base_view = live_gl_widget(G.gl);
-    g_object_set_data_full(G_OBJECT(base_view), "live-gl", G.gl, (GDestroyNotify)live_gl_destroy);
+    /* Zero-OpenGL Cairo canvas: plays AVX2 60 FPS Luma-Halftone Develop transitions
+     * and dirty-rect clipped MWA3 animations via pread with 0 MiB Mesa/GLX RAM!
+     * src_buf (8.3 MB) + thresh_buf (4.1 MB) are allocated lazily on first switch. */
+    G.cur_buf = g_malloc0((size_t)G.ww * (size_t)G.wh * 4);
+    G.surf = cairo_image_surface_create_for_data(G.cur_buf, CAIRO_FORMAT_RGB24, G.ww, G.wh, G.ww * 4);
+    G.canvas = gtk_drawing_area_new();
+    gtk_widget_set_size_request(G.canvas, G.ww, G.wh);
+    g_signal_connect(G.canvas, "draw", G_CALLBACK(on_gallery_draw), NULL);
+    GtkWidget *base_view = G.canvas;
 
     /* caption: name, type and size, IN USE; hints and the button right */
     G.title = label("", "g-title", TRUE);
@@ -1547,8 +2156,7 @@ static GtkWidget *build_gallery(Rect mon, Rect win) {
         gtk_box_pack_start(GTK_BOX(row), ev, FALSE, FALSE, 0);
     }
 
-    /* Defer async thumbnail loading/GPU shader baking until gallery_after_show()
-     * finishes realizing LiveGl so live wallpapers render with dither + atmosphere. */
+    /* Defer async thumbnail loading until gallery_after_show() so window maps immediately. */
     GArray *order = g_array_new(FALSE, FALSE, sizeof(int));
     for (int d = 0; d < S.n; d++) {
         int cand[2] = {init_sel + d, init_sel - d};
@@ -1641,7 +2249,7 @@ static char *preview_cache_path(const Item *it, const char *frag) {
 }
 
 /* Offscreen-bake ONE crisp 3px Bayer dither + atmosphere snapshot via
- * `misa-wall --bake-frame` on cache miss (zero OpenGL inside Theme Picker!). */
+ * `misa-wall --bake-frame` on cache miss (zero OpenGL inside CardPicker!). */
 static GdkPixbuf *bake_dither_pixbuf(const char *cache_dir_path, const char *wall,
                                      const char *frag, int pw, int ph) {
     char *bin = g_build_filename(self_dir(), "misa-wall", NULL);
@@ -1672,11 +2280,41 @@ static GdkPixbuf *bake_dither_pixbuf(const char *cache_dir_path, const char *wal
     return out;
 }
 
+/* Extract a crisp cover-cropped first frame via `misa-wall --thumb` (videos / fallback). */
+static GdkPixbuf *bake_thumb_pixbuf(const char *cache_dir_path, const char *media, int pw, int ph) {
+    char *bin = g_build_filename(self_dir(), "misa-wall", NULL);
+    if (!g_file_test(bin, G_FILE_TEST_IS_EXECUTABLE)) {
+        g_free(bin);
+        return NULL;
+    }
+    g_mkdir_with_parents(cache_dir_path, 0700);
+    char *ppm = g_strdup_printf("%s/.thumb-%d-%lu.ppm", cache_dir_path,
+                                (int)getpid(), (unsigned long)g_thread_self());
+    char ws[16], hs[16];
+    g_snprintf(ws, sizeof ws, "%d", pw);
+    g_snprintf(hs, sizeof hs, "%d", ph);
+    const char *argv[] = {bin, "--thumb", media, ppm, ws, hs, NULL};
+    int status = 1;
+    GdkPixbuf *out = NULL;
+    if (g_spawn_sync(NULL, (char **)argv, NULL,
+                     G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                     NULL, NULL, NULL, NULL, &status, NULL)
+        && status == 0 && g_file_test(ppm, G_FILE_TEST_IS_REGULAR)) {
+        out = gdk_pixbuf_new_from_file(ppm, NULL);
+    }
+    g_unlink(ppm);
+    g_free(ppm);
+    g_free(bin);
+    return out;
+}
+
 static GdkPixbuf *compose_preview_bg(const char *cache_dir_path, const char *under,
                                      const char *image, const char *frag, int pw, int ph) {
     GdkPixbuf *pb = NULL;
     if (*under && frag && *frag)
         pb = bake_dither_pixbuf(cache_dir_path, under, frag, pw, ph);
+    if (!pb && *under && is_video_path(under))
+        pb = bake_thumb_pixbuf(cache_dir_path, under, pw, ph);
     if (!pb && *under)
         pb = cover_file(under, pw, ph, 0, FALSE);
     if (pb && *image) {
@@ -1749,7 +2387,7 @@ static void bake_preview_done(GObject *_o, GAsyncResult *res, gpointer data) {
 
 static void ensure_preview(int i) {
     if (i < 0 || i >= S.n || PV.loaded[i] || PV.pending[i]) return;
-    char *frag = *S.items[i].under ? live_gl_find_sidecar(S.items[i].under) : NULL;
+    char *frag = *S.items[i].under ? find_sidecar_frag(S.items[i].under) : NULL;
     char *cached = preview_cache_path(&S.items[i], frag);
     GdkPixbuf *pb = gdk_pixbuf_new_from_file(cached, NULL);
     if (pb && (gdk_pixbuf_get_width(pb) != PV.w || gdk_pixbuf_get_height(pb) != PV.h)) {
@@ -1969,9 +2607,19 @@ static void on_grab_fail(gpointer _d) {
     quit();
 }
 
+static gboolean on_term_sig(gpointer _d) {
+    (void)_d;
+    quit();
+    return G_SOURCE_REMOVE;
+}
+
 static gboolean build(void) {
     Rect mon = focused_monitor();
-    Rect r = below_bar(mon);                  /* the bar stays above, sharp */
+    /* GALLERY covers the full monitor so wallpaper previews and pixel transitions
+     * extend seamlessly behind floating/island topbars, while Polybar windows on
+     * this monitor are raised directly above CardPicker. SHOWCASE/STRIPS stay
+     * below the bar so their backdrop blur leaves the bar sharp. */
+    Rect r = (A.layout == GALLERY) ? mon : below_bar(mon);
     S.win = overlay_window("CardPicker", r.x, r.y, r.w, r.h);
     if (A.layout == GALLERY)                  /* opaque: nothing to blur behind it */
         gtk_widget_set_visual(S.win, gdk_screen_get_system_visual(gtk_widget_get_screen(S.win)));
@@ -2011,12 +2659,7 @@ static gboolean build(void) {
     gtk_container_add(GTK_CONTAINER(ev), box);
     g_signal_connect(ev, "button-press-event", G_CALLBACK(on_button), NULL);
     g_signal_connect(ev, "scroll-event", G_CALLBACK(on_wheel), NULL);
-    if (A.layout == GALLERY) {
-        g_signal_connect(ev, "motion-notify-event", G_CALLBACK(on_gallery_motion), NULL);
-        gtk_widget_add_events(ev, GDK_SCROLL_MASK | GDK_SMOOTH_SCROLL_MASK | GDK_POINTER_MOTION_MASK);
-    } else {
-        gtk_widget_add_events(ev, GDK_SCROLL_MASK | GDK_SMOOTH_SCROLL_MASK);
-    }
+    gtk_widget_add_events(ev, GDK_SCROLL_MASK | GDK_SMOOTH_SCROLL_MASK);
     gtk_container_add(GTK_CONTAINER(S.win), ev);
 
     g_signal_connect(S.win, "key-press-event", G_CALLBACK(on_key), NULL);
@@ -2071,6 +2714,7 @@ int main(int argc, char **argv) {
         {"hint-move", 0, 0, G_OPTION_ARG_STRING, &A.hint_move, "keycap of the MOVE hint", "TEXT"},
         {NULL}};
     GError *err = NULL;
+    gtk_env_lean();
     if (!gtk_init_with_args(&argc, &argv, "- full-screen picker", entries, NULL, &err)) {
         fprintf(stderr, "CardPicker: %s\n", err ? err->message : "cannot open the display");
         return 2;
@@ -2101,9 +2745,21 @@ int main(int argc, char **argv) {
     mallopt(M_ARENA_MAX, 1);
     if (!read_items()) return 1;
     close_bar_popups(NULL);
+    g_unix_signal_add(SIGTERM, on_term_sig, NULL);
+    g_unix_signal_add(SIGINT, on_term_sig, NULL);
     gboolean ok = build();
     if (ok) gtk_main();
-    gtk_widget_destroy(S.win);
+    gboolean wait_fade = (A.layout == GALLERY && G.n_raised_bars > 0 && S.win
+                          && gdk_screen_is_composited(gtk_widget_get_screen(S.win)));
+    if (S.win) {
+        gtk_widget_hide(S.win);
+        gdk_display_flush(gdk_display_get_default());
+        gtk_widget_destroy(S.win);
+        S.win = NULL;
+        gdk_display_flush(gdk_display_get_default());
+    }
+    if (wait_fade) g_usleep(160000);
+    gallery_restore_bars();
     prune_previews();
     if (S.result < 0) return 1;
     printf("%d\n", S.result);

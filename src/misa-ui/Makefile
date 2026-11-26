@@ -1,7 +1,7 @@
 # misa-ui: the rice's GTK3 popups in C (formerly Python). `make OUT=dir`
 # builds every tool into dir; tools/deploy.sh does that into bin/.
 CC ?= gcc
-CFLAGS ?= -O2 -pipe -Wall -Wextra -Wno-unused-parameter
+CFLAGS ?= -O2 -flto=auto -pipe -Wall -Wextra -Wno-unused-parameter -Wl,-s -Wl,--as-needed
 PKG = gtk+-3.0
 OUT ?= build
 TOOLS = ClipPanel WindowSwitch MediaPillUI CardPicker WaitCompositor WifiPanel BluetoothPanel NotifPanel SoundPanel MusicPanel
@@ -23,10 +23,10 @@ $(OUT)/MediaPillUI: media-pill.c common.c common.h
 	$(CC) $(CFLAGS) $(shell pkg-config --cflags $(PKG)) -o $@ media-pill.c common.c \
 		$(shell pkg-config --libs $(PKG)) -lm
 
-$(OUT)/CardPicker: card-picker.c live-gl.c live-gl.h common.c common.h
+$(OUT)/CardPicker: card-picker.c common.c common.h
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) $(shell pkg-config --cflags $(PKG)) -o $@ card-picker.c live-gl.c common.c \
-		$(shell pkg-config --libs $(PKG)) -lm -ldl
+	$(CC) $(CFLAGS) $(shell pkg-config --cflags $(PKG) gdk-x11-3.0 x11) -o $@ card-picker.c common.c \
+		$(shell pkg-config --libs $(PKG) gdk-x11-3.0 x11) -lm
 
 $(OUT)/WifiPanel: wifi-panel.c common.c common.h
 	@mkdir -p $(OUT)

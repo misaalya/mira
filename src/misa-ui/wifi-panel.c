@@ -1734,6 +1734,7 @@ int main(int argc, char **argv) {
         prespawn_refresh();                      /* overlap 3 nmcli calls with gtk_init + build */
         close_bar_popups("wifi");
     }
+    gtk_env_lean();
     gtk_init(&argc, &argv);
     g_unix_signal_add(SIGTERM, on_term, NULL);
     find_ifname();
