@@ -52,7 +52,7 @@ $(OUT)/NotifPanel: notif-panel.c common.c common.h
 $(OUT)/SoundPanel: sound-panel.c common.c common.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $(shell pkg-config --cflags $(PKG)) -o $@ sound-panel.c common.c \
-		$(shell pkg-config --libs $(PKG)) -lm
+		$(shell pkg-config --libs $(PKG)) -lm -ldl
 
 $(OUT)/MusicPanel: music-panel.c common.c common.h
 	@mkdir -p $(OUT)

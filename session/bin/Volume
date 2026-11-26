@@ -1,22 +1,40 @@
 #!/bin/sh
 # Volume — PipeWire / PulseAudio volume control & OSD trigger for Mira.
+# Hard-clamped to 0..100% (no accidental >100% overdrive).
+
+MAX_VOL=100
+STEP=5
 
 pct() {
-    pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null |
-        grep -o '[0-9]*%' | head -n 1 | tr -d '%'
+    raw=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null) || { printf '0\n'; return; }
+    v=${raw%%\%*}
+    v=${v##* }
+    case "$v" in
+        ''|*[!0-9]*) printf '0\n' ;;
+        *) printf '%s\n' "$v" ;;
+    esac
 }
 
 muted() {
-    pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | grep -q 'yes'
+    case "$(pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null)" in
+        *yes*) return 0 ;;
+        *)     return 1 ;;
+    esac
+}
+
+notify_val() {
+    notify-send -a Volume -h string:x-dunst-stack-tag:volume \
+        -h int:value:"$1" -t 1600 "Volume" "" 2>/dev/null
 }
 
 notify_vol() {
     if muted; then
-        notify-send -a Volume -h string:x-dunst-stack-tag:volume -h int:value:0 -t 1600 "Muted" "" 2>/dev/null
+        notify-send -a Volume -h string:x-dunst-stack-tag:volume \
+            -h int:value:0 -t 1600 "Muted" "" 2>/dev/null
     else
         v=$(pct)
-        [ -n "$v" ] || v=0
-        notify-send -a Volume -h string:x-dunst-stack-tag:volume -h int:value:"$v" -t 1600 "Volume" "" 2>/dev/null
+        [ "$v" -gt "$MAX_VOL" ] && v=$MAX_VOL
+        notify_val "$v"
     fi
 }
 
@@ -25,14 +43,20 @@ case "${1:-}" in
         pct
         ;;
     --inc)
+        cur=$(pct)
+        next=$((cur + STEP))
+        [ "$next" -gt "$MAX_VOL" ] && next=$MAX_VOL
         pactl set-sink-mute @DEFAULT_SINK@ 0
-        pactl set-sink-volume @DEFAULT_SINK@ +5%
-        notify_vol
+        [ "$next" -ne "$cur" ] && pactl set-sink-volume @DEFAULT_SINK@ "${next}%"
+        notify_val "$next"
         ;;
     --dec)
+        cur=$(pct)
+        next=$((cur - STEP))
+        [ "$next" -lt 0 ] && next=0
         pactl set-sink-mute @DEFAULT_SINK@ 0
-        pactl set-sink-volume @DEFAULT_SINK@ -5%
-        notify_vol
+        [ "$next" -ne "$cur" ] && pactl set-sink-volume @DEFAULT_SINK@ "${next}%"
+        notify_val "$next"
         ;;
     --toggle)
         pactl set-sink-mute @DEFAULT_SINK@ toggle

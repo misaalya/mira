@@ -5,11 +5,35 @@
 #   VolumeCtl close              close any open bar popup
 #   VolumeCtl state              JSON: vol, mute, mic, micmute
 #   VolumeCtl device             description of the default output
-#   VolumeCtl set N | mic N      set output / input volume (unmutes)
+#   VolumeCtl set N | mic N      set output / input volume (0..100%, unmutes)
 #   VolumeCtl mute | micmute     toggle mute
 
-pct() { pactl "$1" "$2" 2>/dev/null | grep -o '[0-9]*%' | head -n 1 | tr -d %; }
-yes_no() { pactl "$1" "$2" 2>/dev/null | grep -q 'yes' && echo true || echo false; }
+pct() {
+    raw=$(pactl "$1" "$2" 2>/dev/null) || { printf '0\n'; return; }
+    v=${raw%%\%*}
+    v=${v##* }
+    case "$v" in
+        ''|*[!0-9]*) printf '0\n' ;;
+        *) printf '%s\n' "$v" ;;
+    esac
+}
+
+yes_no() {
+    case "$(pactl "$1" "$2" 2>/dev/null)" in
+        *yes*) printf 'true\n' ;;
+        *)     printf 'false\n' ;;
+    esac
+}
+
+clamp_pct() {
+    v=${1:-0}
+    v=${v%\%}
+    case "$v" in
+        -*|''|*[!0-9]*) v=0 ;;
+    esac
+    [ "$v" -gt 100 ] && v=100
+    printf '%s\n' "$v"
+}
 
 case "${1:-}" in
     state)
@@ -25,12 +49,14 @@ case "${1:-}" in
             jq -r --arg n "$sink" '.[] | select(.name == $n) | .description' 2>/dev/null
         ;;
     set)
+        v=$(clamp_pct "${2:-0}")
         pactl set-sink-mute @DEFAULT_SINK@ 0
-        pactl set-sink-volume @DEFAULT_SINK@ "${2:-0}%"
+        pactl set-sink-volume @DEFAULT_SINK@ "${v}%"
         ;;
     mic)
+        v=$(clamp_pct "${2:-0}")
         pactl set-source-mute @DEFAULT_SOURCE@ 0
-        pactl set-source-volume @DEFAULT_SOURCE@ "${2:-0}%"
+        pactl set-source-volume @DEFAULT_SOURCE@ "${v}%"
         ;;
     mute)    pactl set-sink-mute @DEFAULT_SINK@ toggle ;;
     micmute) pactl set-source-mute @DEFAULT_SOURCE@ toggle ;;

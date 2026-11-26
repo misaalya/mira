@@ -26,6 +26,10 @@ Rect focused_monitor(void);
 /* Rectangle of a bspwm monitor by name; FALSE if not found. */
 gboolean monitor_rect(const char *name, Rect *r);
 
+/* Resolve monitor rect, bar edge ("top"|"bottom"), and bar offset (px) directly
+ * over BSPWM's Unix socket (zero fork, ~0.08 ms vs ~30 ms BarAnchor script). */
+gboolean bar_anchor(gboolean pointer, Rect *mon, char edge[8], int *off);
+
 /* r without the bar: bspwm's top/bottom padding of the monitor at r (the
  * bar's strut, when at least BAR_MIN px). Used for toast / panel / picker
  * content placement so UI elements never collide with the bar. */

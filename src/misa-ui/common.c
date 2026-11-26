@@ -220,6 +220,39 @@ gboolean monitor_rect(const char *name, Rect *r) {
     return ok;
 }
 
+gboolean bar_anchor(gboolean pointer, Rect *mon, char edge[8], int *off) {
+    *mon = (Rect){0, 0, 1920, 1080};
+    g_strlcpy(edge, "top", 8);
+    *off = 0;
+
+    const char *sel = pointer ? "pointed" : "focused";
+    const char *ipc1[] = {"query", "-T", "-m", sel, NULL};
+    char *out = bspwm_ipc(ipc1);
+    if (!out && pointer) {
+        const char *ipc2[] = {"query", "-T", "-m", "focused", NULL};
+        out = bspwm_ipc(ipc2);
+    }
+    int top = 0, bot = 0;
+    gboolean ok = parse_rect_and_pad(out, mon, &top, &bot);
+    g_free(out);
+    if (ok) {
+        if (bot > top) {
+            g_strlcpy(edge, "bottom", 8);
+            *off = bot;
+        } else {
+            g_strlcpy(edge, "top", 8);
+            *off = top;
+        }
+        cached_mon_ok = TRUE;
+        cached_mon_rect = *mon;
+        cached_top_pad = top;
+        cached_bot_pad = bot;
+        return TRUE;
+    }
+    *mon = focused_monitor();
+    return FALSE;
+}
+
 Rect below_bar(Rect r) {
     if (cached_mon_ok && cached_mon_rect.x == r.x && cached_mon_rect.y == r.y
         && cached_mon_rect.w == r.w && cached_mon_rect.h == r.h) {
